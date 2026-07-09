@@ -31,4 +31,9 @@
         description: Diagramming Tool
         server: my-docker
         container: mermaid-live-editor
- 
+    - Docs-Viewer:
+        icon: files.png
+        href: https://docs.arch-services.mywire.org
+        description: Reactive docs viewer
+        server: my-docker
+        container: docs
