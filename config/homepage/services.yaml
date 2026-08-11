@@ -37,3 +37,10 @@
         description: Reactive docs viewer
         server: my-docker
         container: docs
+    - Minecraft:
+        icon: minecraft.png
+        href: https://minecraft.arch-services.mywire.org
+        description: Self hosted Minecraft server
+        server: my-docker
+        container: minecraft-server
+
