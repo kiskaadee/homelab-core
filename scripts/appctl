@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+
+# appctl - Unified, Manifest-Driven Container Orchestrator
+# Discovers individual application repositories located in ~/Sites/*/
+# Injects global homelab secrets from /run/secrets/rendered/traefik-deployments.env
+
+set -e
+
+ENV_FILE="/run/secrets/rendered/traefik-deployments.env"
+SITES_DIR="${SITES_DIR:-$HOME/Sites}"
+
+# Source global secrets/environment if available
+if [ -f "$ENV_FILE" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
+# Discover registered application directories in ~/Sites/
+get_apps() {
+  if [ ! -d "$SITES_DIR" ]; then
+    return
+  fi
+  find "$SITES_DIR" -mindepth 1 -maxdepth 2 \( -name "docker-compose.yml" -o -name "compose.yaml" -o -name "compose.yml" \) \
+    -exec dirname {} \; | xargs -I {} basename {} | sort -u
+}
+
+# Resolve app directory
+get_app_dir() {
+  local app="$1"
+  if [ -d "$SITES_DIR/$app" ]; then
+    echo "$SITES_DIR/$app"
+  else
+    echo ""
+  fi
+}
+
+# Load environment for a specific app (global + app-specific .env or app.yaml)
+setup_app_env() {
+  local app="$1"
+  local app_dir
+  app_dir="$(get_app_dir "$app")"
+  
+  if [ -z "$app_dir" ]; then
+    echo "❌ Error: App '$app' not found under $SITES_DIR"
+    exit 1
+  fi
+
+  # 1. Provide sensible defaults based on standard global variables
+  export PROXY_NETWORK="${PROXY_NETWORK:-proxy-net}"
+  export CERT_RESOLVER="${CERT_RESOLVER:-myresolver}"
+  export DOMAIN_SUFFIX="${DOMAIN_SUFFIX:-arch-services.mywire.org}"
+  export SERVICE_DOMAIN="${SERVICE_DOMAIN:-$app.$DOMAIN_SUFFIX}"
+  export CONTAINER_NAME="${CONTAINER_NAME:-$app}"
+
+  # 2. Source local .env if present
+  if [ -f "$app_dir/.env" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$app_dir/.env"
+    set +a
+  fi
+
+  # 3. Source local app.env if present
+  if [ -f "$app_dir/app.env" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$app_dir/app.env"
+    set +a
+  fi
+}
+
+# Show help usage
+show_help() {
+  echo "🚀 appctl - Homelab Container Orchestrator"
+  echo ""
+  echo "Usage: appctl <command> [service] [args...]"
+  echo ""
+  echo "Commands:"
+  echo "  list, status      List all discovered applications in ~/Sites and their live status"
+  echo "  up <service>      Start/build a service stack"
+  echo "  down <service>    Stop and remove a service stack"
+  echo "  restart <service> Restart a service stack"
+  echo "  logs <service>    Stream service logs"
+  echo "  pull <service>    Pull latest images and recreate service"
+  echo "  config <service>  Validate and view resolved compose configuration"
+}
+
+# List applications dynamically
+cmd_list() {
+  printf "%-20s %-15s %-35s\n" "SERVICE" "STATUS" "DIRECTORY"
+  printf "%-20s %-15s %-35s\n" "-------" "------" "---------"
+
+  for app in $(get_apps); do
+    local app_dir="$SITES_DIR/$app"
+    local status="🔴 Stopped"
+
+    if cd "$app_dir" >/dev/null 2>&1; then
+      local running_count
+      running_count=$(docker compose ps --format json 2>/dev/null | grep -c '"State":' || true)
+      if [ "$running_count" -gt 0 ]; then
+        status="🟢 Running ($running_count)"
+      fi
+      printf "%-20s %-15s %-35s\n" "$app" "$status" "~/Sites/$app"
+    fi
+  done
+}
+
+if [ $# -lt 1 ]; then
+  show_help
+  exit 1
+fi
+
+COMMAND=$1
+APP=$2
+
+case "$COMMAND" in
+  list|status)
+    cmd_list
+    ;;
+  up)
+    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
+    setup_app_env "$APP"
+    echo "🚀 Starting $APP..."
+    cd "$(get_app_dir "$APP")" && docker compose up -d --remove-orphans "${@:3}"
+    ;;
+  down)
+    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
+    setup_app_env "$APP"
+    echo "🛑 Stopping $APP..."
+    cd "$(get_app_dir "$APP")" && docker compose down "${@:3}"
+    ;;
+  restart)
+    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
+    setup_app_env "$APP"
+    echo "🔄 Restarting $APP..."
+    cd "$(get_app_dir "$APP")" && docker compose down && docker compose up -d "${@:3}"
+    ;;
+  pull)
+    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
+    setup_app_env "$APP"
+    echo "📥 Pulling latest images for $APP..."
+    cd "$(get_app_dir "$APP")" && docker compose pull && docker compose up -d --remove-orphans "${@:3}"
+    ;;
+  logs)
+    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
+    setup_app_env "$APP"
+    cd "$(get_app_dir "$APP")" && docker compose logs -f "${@:3}"
+    ;;
+  config)
+    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
+    setup_app_env "$APP"
+    cd "$(get_app_dir "$APP")" && docker compose config
+    ;;
+  *)
+    show_help
+    exit 1
+    ;;
+esac
