@@ -200,31 +200,6 @@ services:
     networks:
       - socket-net
 
-  homepage:
-    image: ghcr.io/gethomepage/homepage:latest
-    container_name: homepage
-    restart: always
-    volumes:
-      - ./config/homepage:/app/config
-      - /home:/home:ro
-    environment:
-      - HOMEPAGE_ALLOWED_HOSTS=${DOMAIN}
-    networks:
-      - proxy-net
-      - socket-net
-    labels:
-      - "traefik.enable=true"
-      # Public (HTTPS)
-      - "traefik.http.routers.homepage.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.homepage.entrypoints=websecure"
-      - "traefik.http.routers.homepage.tls=true"
-      - "traefik.http.routers.homepage.service=homepage-svc"
-      # Public (Redirect)
-      - "traefik.http.routers.homepage-red.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.homepage-red.entrypoints=web"
-      - "traefik.http.routers.homepage-red.middlewares=https-redirect@docker"
-      - "traefik.http.services.homepage-svc.loadbalancer.server.port=3000"
-
 networks:
   proxy-net:
     external: true
