@@ -2,7 +2,7 @@
 
 # appctl - Unified, Manifest-Driven Container Orchestrator
 # Discovers individual application repositories located in ~/Sites/*/
-# Injects global homelab secrets and per-app metadata from app.yaml
+# Injects global homelab secrets, per-app metadata from app.yaml, and monitors Git sync
 
 set -e
 
@@ -31,15 +31,16 @@ show_help() {
   echo "Usage: appctl <command> [service] [options...]"
   echo ""
   echo "Commands:"
-  echo "  list, status [--core]   List all applications (and core infrastructure if --core)"
-  echo "  info <service>          Display comprehensive application metadata & status"
-  echo "  up <service>            Start/build a service stack"
-  echo "  down <service>          Stop and remove a service stack"
-  echo "  restart <service>       Restart a service stack"
-  echo "  pull <service>          Pull latest images and recreate service"
-  echo "  logs <service>          Stream service logs"
-  echo "  config <service>        Validate and view resolved compose configuration"
-  echo "  sync                    Synchronize Homepage dashboard services.yaml from app.yaml"
+  echo "  list, status [--fetch] [--core]  List all applications with Git sync & container status"
+  echo "  info <service>                   Display comprehensive application & Git diagnostics"
+  echo "  up <service>                     Start/build a service stack"
+  echo "  down <service>                   Stop and remove a service stack"
+  echo "  restart <service>                Restart a service stack"
+  echo "  update <service>                 Full stack update (git pull -> compose pull -> recreate)"
+  echo "  pull <service>                   Pull latest images and recreate service"
+  echo "  logs <service>                   Stream service logs"
+  echo "  config <service>                 Validate and view resolved compose configuration"
+  echo "  sync                             Synchronize Homepage dashboard services.yaml from app.yaml"
 }
 
 # Setup application environment based on resolved metadata
@@ -87,7 +88,7 @@ for k, v in env_dict.items():
     set +a
   fi
 
-  # 6. Source local app.env if present
+  # 5. Source local app.env if present
   if [ -f "$APP_DIR/app.env" ]; then
     set -a
     # shellcheck disable=SC1090
@@ -135,6 +136,30 @@ case "$COMMAND" in
     echo "🔄 Restarting $CANONICAL_NAME ($APP_DIR)..."
     cd "$APP_DIR" && docker compose down && docker compose up -d "${@:3}"
     python3 "$ENGINE" sync >/dev/null 2>&1 || true
+    ;;
+  update)
+    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
+    setup_app_env "$APP"
+    echo "🔄 Updating $CANONICAL_NAME ($APP_DIR)..."
+    
+    if [ -d "$APP_DIR/.git" ]; then
+      if [ -n "$(git -C "$APP_DIR" status --porcelain)" ]; then
+        echo "❌ Error: Cannot update. Working tree in $APP_DIR has uncommitted changes."
+        echo "Commit or stash your changes before updating."
+        exit 1
+      fi
+      echo "📥 Pulling latest git changes..."
+      git -C "$APP_DIR" pull --ff-only
+    fi
+
+    echo "🐳 Pulling latest container images..."
+    cd "$APP_DIR" && docker compose pull
+
+    echo "🚀 Recreating container stack..."
+    cd "$APP_DIR" && docker compose up -d --remove-orphans "${@:3}"
+
+    python3 "$ENGINE" sync >/dev/null 2>&1 || true
+    echo "✨ $CANONICAL_NAME successfully updated!"
     ;;
   pull)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi

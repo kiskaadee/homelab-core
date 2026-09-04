@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-appctl_engine.py - Homelab Metadata Engine & Orchestration Parser
+appctl_engine.py - Homelab Metadata Engine, Orchestration Parser & Git Sync Monitor
 """
 
 import os
@@ -8,6 +8,7 @@ import sys
 import json
 import subprocess
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 
 SITES_DIR = os.environ.get("SITES_DIR", os.path.expanduser("~/Sites"))
 CORE_DIR = os.environ.get("CORE_DIR", os.path.expanduser("~/Core"))
@@ -60,22 +61,6 @@ def parse_yaml_simple(text):
                 data[current_key][k] = v
 
     return data
-
-
-def load_global_env():
-    """Load default global environment file if present."""
-    env_vars = {}
-    if os.path.isfile(ENV_FILE):
-        try:
-            with open(ENV_FILE, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        env_vars[k.strip()] = v.strip().strip("\"'")
-        except Exception:
-            pass
-    return env_vars
 
 
 def get_all_apps():
@@ -166,7 +151,6 @@ def get_docker_status(dir_path):
         if not container_ids:
             return "🔴 Stopped"
 
-        # Check how many are running
         inspect_res = subprocess.run(
             ["docker", "inspect", "-f", "{{.State.Running}}"] + container_ids,
             capture_output=True,
@@ -185,6 +169,143 @@ def get_docker_status(dir_path):
             return "🔴 Stopped"
     except Exception:
         return "❓ Unknown"
+
+
+def get_git_sync_status(dir_path):
+    """Inspect local git repository tracking status against remote."""
+    if not os.path.isdir(os.path.join(dir_path, ".git")):
+        return "⚪ Non-Git"
+
+    try:
+        # Check dirty uncommitted status
+        status_res = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=dir_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        is_dirty = bool(status_res.stdout.strip())
+
+        # Check upstream branch
+        upstream_res = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            cwd=dir_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if upstream_res.returncode != 0:
+            return "⚪ Untracked *" if is_dirty else "⚪ Untracked"
+
+        # Check ahead / behind counts
+        rev_res = subprocess.run(
+            ["git", "rev-list", "--left-right", "--count", "HEAD...@{u}"],
+            cwd=dir_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if rev_res.returncode != 0:
+            return "❓ Sync Error"
+
+        parts = rev_res.stdout.strip().split()
+        if len(parts) != 2:
+            return "❓ Unknown"
+
+        ahead = int(parts[0])
+        behind = int(parts[1])
+
+        if ahead == 0 and behind == 0:
+            badge = "✓ Synced"
+        elif ahead > 0 and behind == 0:
+            badge = f"⬆ {ahead} Ahead"
+        elif ahead == 0 and behind > 0:
+            badge = f"⬇ {behind} Behind"
+        else:
+            badge = f"⚡ {ahead}⬆ {behind}⬇"
+
+        if is_dirty:
+            badge += " *"
+
+        return badge
+    except Exception:
+        return "❓ Unknown"
+
+
+def get_git_diagnostics(dir_path):
+    """Get detailed git diagnostics for info command."""
+    if not os.path.isdir(os.path.join(dir_path, ".git")):
+        return None
+
+    diag = {}
+    try:
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=dir_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        diag["branch"] = branch or "HEAD (detached)"
+
+        remote = subprocess.run(
+            ["git", "config", "--get", "remote.origin.url"],
+            cwd=dir_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        diag["remote"] = remote or "None"
+
+        upstream = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+            cwd=dir_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        diag["upstream"] = upstream or "None"
+
+        diag["sync_badge"] = get_git_sync_status(dir_path)
+
+        status_porcelain = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=dir_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        diag["dirty_files"] = status_porcelain.splitlines() if status_porcelain else []
+    except Exception:
+        pass
+    return diag
+
+
+def fetch_repository(dir_path):
+    """Run git fetch on a single repository with timeout."""
+    if os.path.isdir(os.path.join(dir_path, ".git")):
+        try:
+            subprocess.run(
+                ["git", "fetch", "--quiet"],
+                cwd=dir_path,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
+            )
+        except Exception:
+            pass
+
+
+def fetch_all_repositories(apps, include_core=True):
+    """Fetch all repositories concurrently."""
+    dirs_to_fetch = [app["dir_path"] for app in apps]
+    if include_core and os.path.isdir(CORE_DIR):
+        dirs_to_fetch.append(CORE_DIR)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        executor.map(fetch_repository, dirs_to_fetch)
 
 
 def get_core_services():
@@ -217,30 +338,39 @@ def get_core_services():
 
 
 def cmd_list(args):
-    """Format and print application and core stack listings."""
+    """Format and print application and core stack listings with Git sync status."""
     show_core = any(a in ["--core", "-c", "--all", "-a"] for a in args)
+    should_fetch = any(a in ["--fetch", "-f"] for a in args)
     apps = get_all_apps()
 
-    print(f"{'SERVICE':<18} {'STATUS':<16} {'DOMAIN':<30} {'DIRECTORY'}")
-    print(f"{'-------':<18} {'------':<16} {'------':<30} {'---------'}")
+    if should_fetch:
+        print("📡 Fetching remote updates across all repositories...")
+        fetch_all_repositories(apps, include_core=show_core)
+
+    print(f"{'SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'DIRECTORY'}")
+    print(f"{'-------':<16} {'------':<15} {'--------':<15} {'------':<28} {'---------'}")
 
     for app in apps:
         status = get_docker_status(app["dir_path"])
+        git_status = get_git_sync_status(app["dir_path"])
         rel_dir = app["dir_path"].replace(os.path.expanduser("~"), "~")
-        print(f"{app['name']:<18} {status:<16} {app['domain']:<30} {rel_dir}")
+        print(f"{app['name']:<16} {status:<15} {git_status:<15} {app['domain']:<28} {rel_dir}")
 
     if show_core:
+        core_git = get_git_sync_status(CORE_DIR)
         print()
-        print(f"{'CORE SERVICE':<18} {'STATUS':<16} {'DOMAIN':<30} {'DIRECTORY'}")
-        print(f"{'------------':<18} {'------':<16} {'------':<30} {'---------'}")
+        print(f"{'CORE SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'DIRECTORY'}")
+        print(f"{'------------':<16} {'------':<15} {'--------':<15} {'------':<28} {'---------'}")
         core_services = get_core_services()
         rel_core = CORE_DIR.replace(os.path.expanduser("~"), "~")
-        for svc in core_services:
-            print(f"{svc['name']:<18} {svc['status']:<16} {svc['domain']:<30} {rel_core}")
+        for i, svc in enumerate(core_services):
+            # Print core repo git status on the first row
+            row_git = core_git if i == 0 else ""
+            print(f"{svc['name']:<16} {svc['status']:<15} {row_git:<15} {svc['domain']:<28} {rel_core}")
 
 
 def cmd_info(args):
-    """Show detailed metadata and runtime overview for a service."""
+    """Show detailed metadata, runtime overview, and Git diagnostics for a service."""
     if not args:
         print("❌ Error: Service name required for 'info' command")
         sys.exit(1)
@@ -258,6 +388,16 @@ def cmd_info(args):
                 print(f"Status:          {svc['status']}")
                 print(f"Primary Domain:  https://{svc['domain']}" if svc["domain"] != "internal" else f"Domain:          {svc['domain']}")
                 print(f"Description:     {svc['desc']}")
+                
+                core_diag = get_git_diagnostics(CORE_DIR)
+                if core_diag:
+                    print("\nGit Repository (Core):")
+                    print(f"  Branch:        {core_diag['branch']}")
+                    print(f"  Upstream:      {core_diag['upstream']}")
+                    print(f"  Remote URL:    {core_diag['remote']}")
+                    print(f"  Sync Status:   {core_diag['sync_badge']}")
+                    if core_diag["dirty_files"]:
+                        print(f"  Dirty Files:   {len(core_diag['dirty_files'])} uncommitted file(s)")
                 return
 
         print(f"❌ Error: Application '{query}' not found under {SITES_DIR}")
@@ -281,6 +421,21 @@ def cmd_info(args):
     print(f"Networks:        {networks_str}")
     if app["description"]:
         print(f"Description:     {app['description']}")
+
+    # Git Diagnostics
+    git_diag = get_git_diagnostics(app["dir_path"])
+    if git_diag:
+        print("\nGit Repository Diagnostics:")
+        print(f"  Branch:        {git_diag['branch']}")
+        print(f"  Upstream:      {git_diag['upstream']}")
+        print(f"  Remote URL:    {git_diag['remote']}")
+        print(f"  Sync Status:   {git_diag['sync_badge']}")
+        if git_diag["dirty_files"]:
+            print(f"  Dirty Files:   {len(git_diag['dirty_files'])} uncommitted file(s)")
+            for f in git_diag["dirty_files"][:5]:
+                print(f"    - {f}")
+            if len(git_diag["dirty_files"]) > 5:
+                print(f"    ... and {len(git_diag['dirty_files']) - 5} more")
 
     if app["env"]:
         print("\nConfigured Environment Defaults:")
