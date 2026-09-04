@@ -1,9 +1,0 @@
-users:
-  admin:
-    displayname: "Admin"
-    # Password is 'password' (hashed with Authelia's default)
-    password: '$pbkdf2-sha512$310000$6AM/6rKEZJm9nNeMRl.Zfw$BpLugzfKmNdcX5kpf3/RQwIkO.dCUj7ZOYhKatY2H4iyDmMZP2KJ2Zj9u0rr7sBPHoTBS7C.1hWw7qjjUKAkCw' 
-    email: admin@arch-services.mywire.org
-    groups:
-      - admins
-      - dev

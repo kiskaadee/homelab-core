@@ -14,6 +14,9 @@ config/letsencrypt/*
 # Authelia Databases & Mail Logs
 config/authelia/db.sqlite3
 config/authelia/emails.txt
+config/authelia/users.yml
+config/authelia/users.yaml
+
 
 # Diun Databases
 config/diun/diun.db
