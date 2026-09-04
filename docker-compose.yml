@@ -53,6 +53,7 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       # Global TLS defaults for websecure
+      - "--entrypoints.websecure.http.tls=true"
       - "--entrypoints.websecure.http.tls.certresolver=myresolver"
       - "--entrypoints.websecure.http.tls.domains[0].main=${DOMAIN}"
       - "--entrypoints.websecure.http.tls.domains[0].sans=*.${DOMAIN}"
@@ -83,6 +84,8 @@ services:
       - "traefik.http.routers.traefik-dash.entrypoints=websecure"
       - "traefik.http.routers.traefik-dash.tls=true"
       - "traefik.http.routers.traefik-dash.tls.certresolver=myresolver"
+      - "traefik.http.routers.traefik-dash.tls.domains[0].main=${DOMAIN}"
+      - "traefik.http.routers.traefik-dash.tls.domains[0].sans=*.${DOMAIN}"
       - "traefik.http.routers.traefik-dash.service=api@internal"
       - "traefik.http.routers.traefik-dash.middlewares=authelia-auth@docker"
       
