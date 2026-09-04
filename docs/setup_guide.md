@@ -1,80 +1,80 @@
 # Setup & Secrets Management Guide (Traefik Homelab)
 
-This document provides a guide for deploying, managing, and securing the consolidated homeserver core stack.
+This document provides an exhaustive operational guide for configuring, deploying, securing, and maintaining the **Traefik Homelab Core Control Plane** on NixOS.
 
 ---
 
 ## 🏗️ Architectural Overview
 
-The core infrastructure is organized as a single, unified Docker Compose stack:
+The core infrastructure runs as a consolidated Docker Compose stack in [`/home/kiskaadee/Core`](file:///home/kiskaadee/Core):
 
-* **/docker-compose.yml**: Root orchestrator defining all core services (`traefik`, `authelia`, `portainer`, `dozzle`, `watchtower`, `diun`, `homepage`, `socket-proxy`).
-* **/config/**: Holds the configuration directories and sqlite databases for all services:
-  * `config/letsencrypt/`: Contains SSL certificate state (`acme.json`).
-  * `config/authelia/`: Contains single sign-on configs (`configuration.yml`, `users.yml`) and database (`db.sqlite3`).
-  * `config/homepage/`: Contains dashboard layout files (`services.yaml`, `bookmarks.yaml`, etc.).
-  * `config/diun/`: Diun registry monitoring database (`diun.db`).
-
----
-
-## 🔒 Credentials & Secrets Management
-
-Secrets are managed declaratively using **`sops-nix`** (Mozilla SOPS + age keys) inside your system configuration repository (`~/Config`). This keeps all private credentials completely out of Git in an encrypted format.
-
-### How Secrets Flow:
-
-```
-[~/Config/hosts/desktop/secrets.yaml] (Encrypted)
-       │
-       ▼ (Decrypted at boot by sops-nix using SSH host key)
-[/run/secrets/rendered/homeserver.env] (Runtime Environment File)
-       │
-       ▼ (Fed via --env-file flag into Docker Compose)
-[Docker Containers] (Active environment variables)
-```
+* **[`docker-compose.yml`](file:///home/kiskaadee/Core/docker-compose.yml)**: Root compose specification defining all control plane services (`traefik`, `authelia`, `portainer`, `dozzle`, `watchtower`, `diun`, `socket-proxy`).
+* **[`config/`](file:///home/kiskaadee/Core/config/)**: Persistent state directories:
+  * `config/letsencrypt/`: Contains SSL certificate storage (`acme.json`).
+  * `config/authelia/`: Contains configuration (`configuration.yml`, `users.yml`) and authentication database (`db.sqlite3`).
+  * `config/diun/`: Diun container update tracking database (`diun.db`).
 
 ---
 
-## 🔑 Adding/Editing Secrets
+## 🔒 Secrets Architecture & SOPS Flow
 
-To add or modify credentials (e.g. changing your Dynu API key or updating Authelia users):
+All sensitive tokens, encryption keys, and credentials are encrypted using **`sops-nix`** (Mozilla SOPS with age keys derived from the host SSH key). No plaintext secrets exist in any git repository.
 
-1. Navigate to your system configuration repository:
+### Secrets Lifecycle:
+
+```
+[~/Config/hosts/desktop/secrets.yaml] (Encrypted with Age)
+       │
+       ▼ (Decrypted at boot by sops-nix daemon)
+1. [/run/secrets/rendered/homeserver.env]          --> Fed to Core Compose Stack
+2. [/run/secrets/rendered/traefik-deployments.env] --> Fed to appctl & App Stacks
+       │
+       ▼
+[Active Docker Containers]
+```
+
+---
+
+## 🔑 Modifying and Adding Secrets
+
+To update credentials (e.g. changing your Dynu API key or updating Authelia user passwords):
+
+1. Navigate to your NixOS configuration repository:
    ```bash
    cd ~/Config
    ```
-2. Decrypt and open the secrets file in your editor using SOPS:
+2. Decrypt and open the secrets file in your editor:
    ```bash
    nix-shell -p sops --run "sops hosts/desktop/secrets.yaml"
    ```
-3. Append or edit the required keys under the root block:
+3. Update or append keys under the root block:
    ```yaml
    dynu_api_key: "your_dynu_api_key"
-   acme_email: "your_email@provider.com"
-   authelia_session_secret: "secure_64_character_hex_string"
-   authelia_storage_encryption_key: "secure_64_character_hex_string"
-   authelia_identity_validation_reset_password_jwt_secret: "secure_64_character_hex_string"
-   
-   # Hashed password for the default admin user
+   acme_email: "your_email@domain.com"
+   authelia_session_secret: "secure_64_char_secret"
+   authelia_storage_encryption_key: "secure_64_char_key"
+   authelia_identity_validation_reset_password_jwt_secret: "secure_64_char_jwt_secret"
    authelia_user_kiskaadee_password_hash: "$argon2id$v=19$m=65536..."
    ```
    *To generate an Argon2 password hash securely, run:*
-   `docker run --rm -it authelia/authelia:latest authelia crypto hash generate argon2`
-4. Save and close the editor. SOPS will automatically encrypt the file and write it back to disk.
+   ```bash
+   docker run --rm -it authelia/authelia:latest authelia crypto hash generate argon2
+   ```
+4. Save and close. SOPS will automatically encrypt the modified file before saving.
 
 ---
 
-## ⚙️ NixOS Integration
+## ⚙️ Declarative NixOS Modules
 
-The stack is managed as a declarative systemd service inside `/home/kiskaadee/Config/hosts/desktop/homeserver.nix`:
+The Core stack and deployment environments are defined declaratively in `~/Config`:
 
-### 1. Secret Environment Template
-The module defines a SOPS template to gather all secrets and structure them as key-value pairs at `/run/secrets/rendered/homeserver.env`:
+### 1. Control Plane Module ([`hosts/desktop/homeserver.nix`](file:///home/kiskaadee/Config/hosts/desktop/homeserver.nix))
+Generates `/run/secrets/rendered/homeserver.env` and manages the `homeserver-core.service` systemd daemon:
 ```nix
 sops.templates."homeserver.env" = {
   owner = "kiskaadee";
   content = lib.generators.toKeyValue {} {
-    DOMAIN = "arch-services.mywire.org";
+    DOMAIN = "roadtotech.me";
     DOCKER_API_VERSION = "1.40";
     DYNU_API_KEY = config.sops.placeholder.dynu_api_key;
     ACME_EMAIL = config.sops.placeholder.acme_email;
@@ -83,59 +83,25 @@ sops.templates."homeserver.env" = {
     AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET = config.sops.placeholder.authelia_identity_validation_reset_password_jwt_secret;
   };
 };
-
-# 2. Declarative User Database Template
-We also generate Authelia's `users.yml` file from the decrypted Argon2 hash:
-```nix
-sops.templates."users.yml" = {
-  owner = "kiskaadee";
-  content = ''
-    users:
-      kiskaadee:
-        displayname: "Kiskaadee"
-        password: "${config.sops.placeholder.authelia_user_kiskaadee_password_hash}"
-        email: "fcortesbio@gmail.com"
-        groups:
-          - admins
-          - dev
-  '';
-};
 ```
 
-### 3. systemd Lifecycle Daemon
-The service starts and stops the compose stack automatically:
-```nix
-systemd.services.homeserver-core = {
-  description = "Homeserver Core Stack";
-  after = [ "network-online.target" "docker.service" ];
-  wants = [ "network-online.target" ];
-  wantedBy = [ "multi-user.target" ];
-
-  serviceConfig = {
-    Type = "oneshot";
-    RemainAfterExit = true;
-    WorkingDirectory = "/home/kiskaadee/Deployments/homeserver";
-    ExecStart = "${pkgs.docker-compose}/bin/docker-compose --env-file ${config.sops.templates."homeserver.env".path} up -d --remove-orphans";
-    ExecStop = "${pkgs.docker-compose}/bin/docker-compose down";
-  };
-};
-```
+### 2. Applications Secret Module ([`hosts/desktop/traefik-deployments.nix`](file:///home/kiskaadee/Config/hosts/desktop/traefik-deployments.nix))
+Generates `/run/secrets/rendered/traefik-deployments.env` consumed by `appctl`.
 
 ---
 
 ## 🚀 Running and Managing the Stack
 
-Because the systemd service manages the containers, standard `systemctl` commands can be used:
+### Standard Systemd Operations:
+* **Start:** `sudo systemctl start homeserver-core`
+* **Stop:** `sudo systemctl stop homeserver-core`
+* **Restart:** `sudo systemctl restart homeserver-core`
+* **Status:** `systemctl status homeserver-core`
+* **Live Logs:** `journalctl -u homeserver-core -f`
 
-* **Start the stack**: `sudo systemctl start homeserver-core`
-* **Stop the stack**: `sudo systemctl stop homeserver-core`
-* **Check service status**: `systemctl status homeserver-core`
-* **Check logs**: `journalctl -u homeserver-core`
-
-### Dynamic Configuration Tweaks (Non-Nix Workflow)
-If you modify `docker-compose.yml` (e.g. adding a new Traefik routing label), you do **not** need to rebuild NixOS! You can apply it instantly:
+### Dynamic Tweaks without Rebuilding NixOS:
+When making configuration adjustments to `docker-compose.yml` (e.g. tuning Traefik middlewares):
 ```bash
-cd /home/kiskaadee/Deployments/homeserver
+cd ~/Core
 docker compose --env-file /run/secrets/rendered/homeserver.env up -d --remove-orphans
 ```
-This preserves the extreme agility of Docker Compose while keeping your system configuration and secrets declaratively managed.
