@@ -7,6 +7,9 @@
 set -e
 
 ENV_FILE="/run/secrets/rendered/traefik-deployments.env"
+if [ ! -f "$ENV_FILE" ] && [ -f "/run/secrets/traefik-deployments.env" ]; then
+  ENV_FILE="/run/secrets/traefik-deployments.env"
+fi
 SITES_DIR="${SITES_DIR:-$HOME/Sites}"
 
 # Source global secrets/environment if available
@@ -49,9 +52,69 @@ setup_app_env() {
 
   # 1. Provide sensible defaults based on standard global variables
   export PROXY_NETWORK="${PROXY_NETWORK:-proxy-net}"
+  export NETWORK_NAME="${NETWORK_NAME:-$PROXY_NETWORK}"
   export CERT_RESOLVER="${CERT_RESOLVER:-myresolver}"
-  export DOMAIN_SUFFIX="${DOMAIN_SUFFIX:-arch-services.mywire.org}"
-  export SERVICE_DOMAIN="${SERVICE_DOMAIN:-$app.$DOMAIN_SUFFIX}"
+  export DOMAIN_SUFFIX="${DOMAIN_SUFFIX:-roadtotech.me}"
+
+  # Smart per-application default domain and variable mappings
+  case "$app" in
+    homelab-landing)
+      export SERVICE_DOMAIN="${LANDING_DOMAIN:-$DOMAIN_SUFFIX}"
+      export CONTAINER_NAME="homelab-landing"
+      ;;
+    homelab-dashboard)
+      export SERVICE_DOMAIN="${DASHBOARD_DOMAIN:-dashboard.$DOMAIN_SUFFIX}"
+      export LEARNING_DOMAIN="${LEARNING_DOMAIN:-learning.$DOMAIN_SUFFIX}"
+      ;;
+    homelab-doc2site)
+      export SERVICE_NAME="docs"
+      export CONTAINER_NAME="docs"
+      export SERVICE_DOMAIN="${DOCS_DOMAIN:-docs.$DOMAIN_SUFFIX}"
+      export PROJECT_PATH="${DOCS_PROJECT_PATH:-/home/kiskaadee/Learn/backend-residency}"
+      ;;
+    homelab-jellyfin)
+      export SERVICE_NAME="${JELLYFIN_SERVICE_NAME:-jellyfin}"
+      export CONTAINER_NAME="${JELLYFIN_CONTAINER_NAME:-jellyfin}"
+      export SERVICE_DOMAIN="${JELLYFIN_DOMAIN:-jellyfin.$DOMAIN_SUFFIX}"
+      export MEDIA_PATH="${JELLYFIN_MEDIA_PATH:-/media}"
+      ;;
+    homelab-excalidraw)
+      export SERVICE_DOMAIN="${EXCALIDRAW_DOMAIN:-excalidraw.$DOMAIN_SUFFIX}"
+      export DOMAIN="${EXCALIDRAW_DOMAIN:-excalidraw.$DOMAIN_SUFFIX}"
+      ;;
+    homelab-mermaid)
+      export SERVICE_NAME="${MERMAID_SERVICE_NAME:-mermaid}"
+      export SERVICE_DOMAIN="${MERMAID_DOMAIN:-mermaid.$DOMAIN_SUFFIX}"
+      ;;
+    homelab-minecraft)
+      export SERVICE_DOMAIN="${MINECRAFT_DOMAIN:-minecraft.$DOMAIN_SUFFIX}"
+      export MINECRAFT_DOMAIN="${MINECRAFT_DOMAIN:-minecraft.$DOMAIN_SUFFIX}"
+      ;;
+    homelab-gitea)
+      export SERVICE_NAME="gitea"
+      export CONTAINER_NAME="gitea"
+      export SERVICE_DOMAIN="${GITEA_DOMAIN:-gitea.$DOMAIN_SUFFIX}"
+      export SSH_DOMAIN="${GITEA_SSH_DOMAIN:-gitea.$DOMAIN_SUFFIX}"
+      ;;
+    homelab-ollama)
+      export SERVICE_NAME="ollama"
+      export CONTAINER_NAME="ollama"
+      export SERVICE_DOMAIN="${OLLAMA_DOMAIN:-ollama.$DOMAIN_SUFFIX}"
+      ;;
+    homelab-pgsql)
+      export SERVICE_NAME="pgsql"
+      export SERVICE_DOMAIN="${POSTGRES_DOMAIN:-pgsql.$DOMAIN_SUFFIX}"
+      ;;
+    homelab-mongodb)
+      export SERVICE_NAME="mongodb"
+      export SERVICE_DOMAIN="${MONGO_DOMAIN:-mongodb.$DOMAIN_SUFFIX}"
+      ;;
+    *)
+      export SERVICE_DOMAIN="${SERVICE_DOMAIN:-$app.$DOMAIN_SUFFIX}"
+      ;;
+  esac
+
+  export DOMAIN="${DOMAIN:-$SERVICE_DOMAIN}"
   export CONTAINER_NAME="${CONTAINER_NAME:-$app}"
 
   # 2. Source local .env if present

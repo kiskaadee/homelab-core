@@ -5,10 +5,11 @@ secrets.txt
 backup.zip
 
 # SSL / ACME Certificates & Keys
-config/letsencrypt/acme.json
+config/letsencrypt/*
 **/*.key
 **/*.crt
 **/*.pem
+**/*.bak
 
 # Authelia Databases & Mail Logs
 config/authelia/db.sqlite3

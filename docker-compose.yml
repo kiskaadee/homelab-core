@@ -53,7 +53,7 @@ services:
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
       # Global TLS defaults for websecure
-      - "--entrypoints.websecure.http.tls.certResolver=myresolver"
+      - "--entrypoints.websecure.http.tls.certresolver=myresolver"
       - "--entrypoints.websecure.http.tls.domains[0].main=${DOMAIN}"
       - "--entrypoints.websecure.http.tls.domains[0].sans=*.${DOMAIN}"
       # SSL Setup
@@ -82,6 +82,7 @@ services:
       - "traefik.http.routers.traefik-dash.rule=Host(`traefik.${DOMAIN}`)"
       - "traefik.http.routers.traefik-dash.entrypoints=websecure"
       - "traefik.http.routers.traefik-dash.tls=true"
+      - "traefik.http.routers.traefik-dash.tls.certresolver=myresolver"
       - "traefik.http.routers.traefik-dash.service=api@internal"
       - "traefik.http.routers.traefik-dash.middlewares=authelia-auth@docker"
       
@@ -116,6 +117,7 @@ services:
       - "traefik.http.routers.authelia.rule=Host(`auth.${DOMAIN}`)"
       - "traefik.http.routers.authelia.entrypoints=websecure"
       - "traefik.http.routers.authelia.tls=true"
+      - "traefik.http.routers.authelia.tls.certresolver=myresolver"
       # Public (Redirect)
       - "traefik.http.routers.authelia-red.rule=Host(`auth.${DOMAIN}`)"
       - "traefik.http.routers.authelia-red.entrypoints=web"
@@ -137,6 +139,7 @@ services:
       - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN}`)"
       - "traefik.http.routers.portainer.entrypoints=websecure"
       - "traefik.http.routers.portainer.tls=true"
+      - "traefik.http.routers.portainer.tls.certresolver=myresolver"
       - "traefik.http.routers.portainer.middlewares=authelia-auth@docker"
       - "traefik.http.routers.portainer.service=portainer-svc"
       # Public (Redirect)
