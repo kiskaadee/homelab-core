@@ -12,8 +12,8 @@ services:
       - TASKS=1
       - IMAGES=1
       - VOLUMES=1
-      - POST=1
-      - DELETE=1
+      - POST=0
+      - DELETE=0
       - DOCKER_API_VERSION=${DOCKER_API_VERSION:-1.40}
       - VERSION=1
       - INFO=1
