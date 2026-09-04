@@ -2,15 +2,19 @@
 
 # appctl - Unified, Manifest-Driven Container Orchestrator
 # Discovers individual application repositories located in ~/Sites/*/
-# Injects global homelab secrets from /run/secrets/rendered/traefik-deployments.env
+# Injects global homelab secrets and per-app metadata from app.yaml
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENGINE="$SCRIPT_DIR/appctl_engine.py"
 ENV_FILE="/run/secrets/rendered/traefik-deployments.env"
 if [ ! -f "$ENV_FILE" ] && [ -f "/run/secrets/traefik-deployments.env" ]; then
   ENV_FILE="/run/secrets/traefik-deployments.env"
 fi
-SITES_DIR="${SITES_DIR:-$HOME/Sites}"
+export SITES_DIR="${SITES_DIR:-$HOME/Sites}"
+export CORE_DIR="${CORE_DIR:-$HOME/Core}"
+export ENV_FILE
 
 # Source global secrets/environment if available
 if [ -f "$ENV_FILE" ]; then
@@ -20,154 +24,76 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
-# Discover registered application directories in ~/Sites/
-get_apps() {
-  if [ ! -d "$SITES_DIR" ]; then
-    return
-  fi
-  find "$SITES_DIR" -mindepth 1 -maxdepth 2 \( -name "docker-compose.yml" -o -name "compose.yaml" -o -name "compose.yml" \) \
-    -exec dirname {} \; | xargs -I {} basename {} | sort -u
+# Show help usage
+show_help() {
+  echo "🚀 appctl - Homelab Container Orchestrator"
+  echo ""
+  echo "Usage: appctl <command> [service] [options...]"
+  echo ""
+  echo "Commands:"
+  echo "  list, status [--core]   List all applications (and core infrastructure if --core)"
+  echo "  info <service>          Display comprehensive application metadata & status"
+  echo "  up <service>            Start/build a service stack"
+  echo "  down <service>          Stop and remove a service stack"
+  echo "  restart <service>       Restart a service stack"
+  echo "  pull <service>          Pull latest images and recreate service"
+  echo "  logs <service>          Stream service logs"
+  echo "  config <service>        Validate and view resolved compose configuration"
+  echo "  sync                    Synchronize Homepage dashboard services.yaml from app.yaml"
 }
 
-# Resolve app directory
-get_app_dir() {
-  local app="$1"
-  if [ -d "$SITES_DIR/$app" ]; then
-    echo "$SITES_DIR/$app"
-  else
-    echo ""
-  fi
-}
-
-# Load environment for a specific app (global + app-specific .env or app.yaml)
+# Setup application environment based on resolved metadata
 setup_app_env() {
-  local app="$1"
-  local app_dir
-  app_dir="$(get_app_dir "$app")"
-  
-  if [ -z "$app_dir" ]; then
-    echo "❌ Error: App '$app' not found under $SITES_DIR"
+  local query="$1"
+  local resolved_json
+  resolved_json=$(python3 "$ENGINE" resolve "$query" 2>/dev/null || true)
+
+  if [ -z "$resolved_json" ]; then
+    echo "❌ Error: Application '$query' not found under $SITES_DIR"
     exit 1
   fi
 
-  # 1. Provide sensible defaults based on standard global variables
+  # Extract fields via python json
+  APP_DIR=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['dir_path'])" "$resolved_json")
+  CANONICAL_NAME=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['name'])" "$resolved_json")
+  RESOLVED_DOMAIN=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['domain'])" "$resolved_json")
+
+  # 1. Base infrastructure defaults
   export PROXY_NETWORK="${PROXY_NETWORK:-proxy-net}"
   export NETWORK_NAME="${NETWORK_NAME:-$PROXY_NETWORK}"
   export CERT_RESOLVER="${CERT_RESOLVER:-myresolver}"
   export DOMAIN_SUFFIX="${DOMAIN_SUFFIX:-roadtotech.me}"
 
-  # Smart per-application default domain and variable mappings
-  case "$app" in
-    homelab-landing)
-      export SERVICE_DOMAIN="${LANDING_DOMAIN:-$DOMAIN_SUFFIX}"
-      export CONTAINER_NAME="homelab-landing"
-      ;;
-    homelab-dashboard)
-      export SERVICE_DOMAIN="${DASHBOARD_DOMAIN:-dashboard.$DOMAIN_SUFFIX}"
-      export LEARNING_DOMAIN="${LEARNING_DOMAIN:-learning.$DOMAIN_SUFFIX}"
-      ;;
-    homelab-doc2site)
-      export SERVICE_NAME="docs"
-      export CONTAINER_NAME="docs"
-      export SERVICE_DOMAIN="${DOCS_DOMAIN:-docs.$DOMAIN_SUFFIX}"
-      export PROJECT_PATH="${DOCS_PROJECT_PATH:-/home/kiskaadee/Learn/backend-residency}"
-      ;;
-    homelab-jellyfin)
-      export SERVICE_NAME="${JELLYFIN_SERVICE_NAME:-jellyfin}"
-      export CONTAINER_NAME="${JELLYFIN_CONTAINER_NAME:-jellyfin}"
-      export SERVICE_DOMAIN="${JELLYFIN_DOMAIN:-jellyfin.$DOMAIN_SUFFIX}"
-      export MEDIA_PATH="${JELLYFIN_MEDIA_PATH:-/media}"
-      ;;
-    homelab-excalidraw)
-      export SERVICE_DOMAIN="${EXCALIDRAW_DOMAIN:-excalidraw.$DOMAIN_SUFFIX}"
-      export DOMAIN="${EXCALIDRAW_DOMAIN:-excalidraw.$DOMAIN_SUFFIX}"
-      ;;
-    homelab-mermaid)
-      export SERVICE_NAME="${MERMAID_SERVICE_NAME:-mermaid}"
-      export SERVICE_DOMAIN="${MERMAID_DOMAIN:-mermaid.$DOMAIN_SUFFIX}"
-      ;;
-    homelab-minecraft)
-      export SERVICE_DOMAIN="${MINECRAFT_DOMAIN:-minecraft.$DOMAIN_SUFFIX}"
-      export MINECRAFT_DOMAIN="${MINECRAFT_DOMAIN:-minecraft.$DOMAIN_SUFFIX}"
-      ;;
-    homelab-gitea)
-      export SERVICE_NAME="gitea"
-      export CONTAINER_NAME="gitea"
-      export SERVICE_DOMAIN="${GITEA_DOMAIN:-gitea.$DOMAIN_SUFFIX}"
-      export SSH_DOMAIN="${GITEA_SSH_DOMAIN:-gitea.$DOMAIN_SUFFIX}"
-      ;;
-    homelab-ollama)
-      export SERVICE_NAME="ollama"
-      export CONTAINER_NAME="ollama"
-      export SERVICE_DOMAIN="${OLLAMA_DOMAIN:-ollama.$DOMAIN_SUFFIX}"
-      ;;
-    homelab-pgsql)
-      export SERVICE_NAME="pgsql"
-      export SERVICE_DOMAIN="${POSTGRES_DOMAIN:-pgsql.$DOMAIN_SUFFIX}"
-      ;;
-    homelab-mongodb)
-      export SERVICE_NAME="mongodb"
-      export SERVICE_DOMAIN="${MONGO_DOMAIN:-mongodb.$DOMAIN_SUFFIX}"
-      ;;
-    *)
-      export SERVICE_DOMAIN="${SERVICE_DOMAIN:-$app.$DOMAIN_SUFFIX}"
-      ;;
-  esac
+  # 2. Canonical application identity
+  export SERVICE_NAME="$CANONICAL_NAME"
+  export CONTAINER_NAME="$CANONICAL_NAME"
+  export SERVICE_DOMAIN="$RESOLVED_DOMAIN"
+  export DOMAIN="$RESOLVED_DOMAIN"
 
-  export DOMAIN="${DOMAIN:-$SERVICE_DOMAIN}"
-  export CONTAINER_NAME="${CONTAINER_NAME:-$app}"
+  # 3. Dynamic environment variables from app.yaml (e.g. PROJECT_PATH, MEDIA_PATH, etc.)
+  eval "$(python3 -c "
+import json, sys
+d = json.loads(sys.argv[1])
+env_dict = d.get('env', {})
+for k, v in env_dict.items():
+    print(f'export {k}=\"{v}\"')
+" "$resolved_json")"
 
-  # 2. Source local .env if present
-  if [ -f "$app_dir/.env" ]; then
+  # 4. Source local .env if present
+  if [ -f "$APP_DIR/.env" ]; then
     set -a
     # shellcheck disable=SC1090
-    source "$app_dir/.env"
+    source "$APP_DIR/.env"
     set +a
   fi
 
-  # 3. Source local app.env if present
-  if [ -f "$app_dir/app.env" ]; then
+  # 6. Source local app.env if present
+  if [ -f "$APP_DIR/app.env" ]; then
     set -a
     # shellcheck disable=SC1090
-    source "$app_dir/app.env"
+    source "$APP_DIR/app.env"
     set +a
   fi
-}
-
-# Show help usage
-show_help() {
-  echo "🚀 appctl - Homelab Container Orchestrator"
-  echo ""
-  echo "Usage: appctl <command> [service] [args...]"
-  echo ""
-  echo "Commands:"
-  echo "  list, status      List all discovered applications in ~/Sites and their live status"
-  echo "  up <service>      Start/build a service stack"
-  echo "  down <service>    Stop and remove a service stack"
-  echo "  restart <service> Restart a service stack"
-  echo "  logs <service>    Stream service logs"
-  echo "  pull <service>    Pull latest images and recreate service"
-  echo "  config <service>  Validate and view resolved compose configuration"
-}
-
-# List applications dynamically
-cmd_list() {
-  printf "%-20s %-15s %-35s\n" "SERVICE" "STATUS" "DIRECTORY"
-  printf "%-20s %-15s %-35s\n" "-------" "------" "---------"
-
-  for app in $(get_apps); do
-    local app_dir="$SITES_DIR/$app"
-    local status="🔴 Stopped"
-
-    if cd "$app_dir" >/dev/null 2>&1; then
-      local running_count
-      running_count=$(docker compose ps --format json 2>/dev/null | grep -c '"State":' || true)
-      if [ "$running_count" -gt 0 ]; then
-        status="🟢 Running ($running_count)"
-      fi
-      printf "%-20s %-15s %-35s\n" "$app" "$status" "~/Sites/$app"
-    fi
-  done
 }
 
 if [ $# -lt 1 ]; then
@@ -180,41 +106,51 @@ APP=$2
 
 case "$COMMAND" in
   list|status)
-    cmd_list
+    python3 "$ENGINE" list "${@:2}"
+    ;;
+  info)
+    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
+    python3 "$ENGINE" info "$APP"
+    ;;
+  sync)
+    python3 "$ENGINE" sync "${@:2}"
     ;;
   up)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    echo "🚀 Starting $APP..."
-    cd "$(get_app_dir "$APP")" && docker compose up -d --remove-orphans "${@:3}"
+    echo "🚀 Starting $CANONICAL_NAME ($APP_DIR)..."
+    cd "$APP_DIR" && docker compose up -d --remove-orphans "${@:3}"
+    python3 "$ENGINE" sync >/dev/null 2>&1 || true
     ;;
   down)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    echo "🛑 Stopping $APP..."
-    cd "$(get_app_dir "$APP")" && docker compose down "${@:3}"
+    echo "🛑 Stopping $CANONICAL_NAME ($APP_DIR)..."
+    cd "$APP_DIR" && docker compose down "${@:3}"
+    python3 "$ENGINE" sync >/dev/null 2>&1 || true
     ;;
   restart)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    echo "🔄 Restarting $APP..."
-    cd "$(get_app_dir "$APP")" && docker compose down && docker compose up -d "${@:3}"
+    echo "🔄 Restarting $CANONICAL_NAME ($APP_DIR)..."
+    cd "$APP_DIR" && docker compose down && docker compose up -d "${@:3}"
+    python3 "$ENGINE" sync >/dev/null 2>&1 || true
     ;;
   pull)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    echo "📥 Pulling latest images for $APP..."
-    cd "$(get_app_dir "$APP")" && docker compose pull && docker compose up -d --remove-orphans "${@:3}"
+    echo "📥 Pulling latest images for $CANONICAL_NAME..."
+    cd "$APP_DIR" && docker compose pull && docker compose up -d --remove-orphans "${@:3}"
     ;;
   logs)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    cd "$(get_app_dir "$APP")" && docker compose logs -f "${@:3}"
+    cd "$APP_DIR" && docker compose logs -f "${@:3}"
     ;;
   config)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    cd "$(get_app_dir "$APP")" && docker compose config
+    cd "$APP_DIR" && docker compose config
     ;;
   *)
     show_help
