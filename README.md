@@ -68,13 +68,16 @@ Applications in `~/Sites` are managed using the custom `appctl` CLI tool located
 
 ### Key Commands:
 ```bash
-# List all application stacks with status, domain, and paths
+# List all application stacks with runtime container health and Git sync status
 appctl list
 
-# List all applications AND core infrastructure services
+# Fetch upstream git changes across all repositories before rendering status
+appctl list --fetch
+
+# List all applications AND core control plane services
 appctl list --core
 
-# Display comprehensive metadata, routing, and card info for an app
+# Display comprehensive metadata, routing, environment, and Git diagnostics
 appctl info docs
 appctl info jellyfin
 
@@ -82,6 +85,11 @@ appctl info jellyfin
 appctl up docs
 appctl down jellyfin
 appctl restart dash
+
+# Full atomic stack upgrade (clean check -> git pull --ff-only -> docker compose pull -> docker compose up -d -> appctl sync)
+appctl update docs
+appctl update core
+appctl update all
 
 # Validate resolved docker compose configuration
 appctl config docs
