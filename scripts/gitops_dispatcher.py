@@ -207,12 +207,17 @@ def main():
         if "--branch" in sys.argv:
             b_idx = sys.argv.index("--branch")
             if b_idx + 1 < len(sys.argv):
-                branch = sys.argv[b_idx + 1]
+                branch = sys.argv[b_idx + 1].replace("refs/heads/", "")
     else:
-        # Read JSON payload from stdin (sent by webhook daemon)
-        payload_raw = sys.stdin.read().strip()
+        # 1. Check if first argument is a raw JSON payload string
+        if len(sys.argv) > 1 and sys.argv[1].strip().startswith("{"):
+            payload_raw = sys.argv[1].strip()
+        # 2. Fallback to reading from stdin
+        elif not sys.stdin.isatty():
+            payload_raw = sys.stdin.read().strip()
+
         if not payload_raw:
-            logging.error("No webhook payload provided on stdin.")
+            logging.error("No webhook payload provided (checked sys.argv and stdin).")
             sys.exit(1)
 
         try:
