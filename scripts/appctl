@@ -77,7 +77,8 @@ import json, sys
 d = json.loads(sys.argv[1])
 env_dict = d.get('env', {})
 for k, v in env_dict.items():
-    print(f'export {k}=\"{v}\"')
+    if v != '' and v is not None:
+        print(f'export {k}=\"{v}\"')
 " "$resolved_json")"
 
   # 4. Source local .env if present
