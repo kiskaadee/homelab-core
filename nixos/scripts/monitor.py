@@ -10,13 +10,14 @@ This local-first state verification prevents making redundant API requests to
 the DNS provider, avoiding rate-limiting, IP bans, or API abuse flags.
 """
 
-import urllib.request
-import re
 import json
 import os
+import re
 import subprocess
 import sys
-from datetime import datetime
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
 
 # History file location storing the transition log of public IP states.
 # Defaults to a state directory managed securely by the systemd service unit.
@@ -44,7 +45,7 @@ def is_valid_public_ipv4(ip):
     octets = [int(x) for x in match.groups()]
     if any(x > 255 for x in octets):
         return False
-    a, b, c, d = octets
+    a, b, _c, _d = octets
 
     # RFC 1918 Private ranges: 10.0.0.0/8, 192.168.0.0/16, 172.16.0.0/12
     if a == 10:
@@ -63,10 +64,7 @@ def is_valid_public_ipv4(ip):
         return False
 
     # Link-local addresses: 169.254.0.0/16
-    if a == 169 and b == 254:
-        return False
-
-    return True
+    return not (a == 169 and b == 254)
 
 
 def get_public_ip():
@@ -92,8 +90,8 @@ def get_public_ip():
                     return ip
                 else:
                     errors.append(f"{provider}: invalid public IPv4 '{ip}'")
-        except Exception as e:
-            errors.append(f"{provider}: {str(e)}")
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            errors.append(f"{provider}: {e!s}")
 
     print(
         f"Error: All IP discovery providers failed. Details: {errors}",
@@ -124,7 +122,7 @@ def get_last_recorded_ip():
                         return entry.get("ip")
                 except json.JSONDecodeError:
                     continue
-    except Exception as e:
+    except OSError as e:
         print(f"Warning: Failed to read history file: {e}", file=sys.stderr)
     return None
 
@@ -135,7 +133,7 @@ def record_ip(ip, status, details=None):
     """
     os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
     entry = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "ip": ip,
         "status": status
     }
@@ -144,7 +142,7 @@ def record_ip(ip, status, details=None):
     try:
         with open(HISTORY_FILE, "a") as f:
             f.write(json.dumps(entry) + "\n")
-    except Exception as e:
+    except OSError as e:
         print(f"Error: Failed to write to history file: {e}", file=sys.stderr)
 
 
@@ -160,7 +158,8 @@ def trigger_ddclient():
         res = subprocess.run(
             ["systemctl", "start", "ddclient.service"],
             capture_output=True,
-            text=True
+            text=True,
+            check=False,
         )
         if res.returncode == 0:
             return True, None
@@ -170,7 +169,7 @@ def trigger_ddclient():
                 f"{res.stderr.strip()}"
             )
             return False, err_msg
-    except Exception as e:
+    except (OSError, subprocess.SubprocessError) as e:
         return False, str(e)
 
 
