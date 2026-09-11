@@ -100,20 +100,32 @@
     defaultEditor = true;
   };
 
+  # Shell enhancements — NixOS-level options handle both install and shell init
+  programs.zoxide.enable = true;    # smart cd; initialises in bash/zsh automatically
+  programs.starship.enable = true;  # cross-shell prompt
+
   environment.systemPackages = with pkgs; [
     # Monitoring & diagnostics
     htop
     iotop
     iftop
     ncdu
-    # Secrets tooling
+    # Secrets tooling (required for sops-nix secret decryption and manual re-encryption)
     sops
     age
-    # Utilities
+    # Python runtime (hard requirement for appctl and gitops_dispatcher.py)
+    python3
+    # Modern shell utilities
+    eza        # ls replacement
+    ripgrep    # rg — fast grep
+    fd         # fast find
+    tree       # directory tree viewer
+    # Network & transfer
     git
     curl
     wget
     rclone
+    jq
   ];
 
   # ── State version ─────────────────────────────────────────────────────────────
