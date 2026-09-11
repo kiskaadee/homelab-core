@@ -31,16 +31,17 @@ show_help() {
   echo "Usage: appctl <command> [service] [options...]"
   echo ""
   echo "Commands:"
-  echo "  list, status [--fetch] [--core]  List all applications with Git sync & container status"
-  echo "  info <service>                   Display comprehensive application & Git diagnostics"
-  echo "  up <service>                     Start/build a service stack"
-  echo "  down <service>                   Stop and remove a service stack"
-  echo "  restart <service>                Restart a service stack"
-  echo "  update <service>                 Full stack update (git pull -> compose pull -> recreate)"
-  echo "  pull <service>                   Pull latest images and recreate service"
-  echo "  logs <service>                   Stream service logs"
-  echo "  config <service>                 Validate and view resolved compose configuration"
-  echo "  sync                             Synchronize Homepage dashboard services.yaml from app.yaml"
+  echo "  list, status [--fetch] [--core] [--ssl]  List all applications with Git sync & container status"
+  echo "  ssl [service]                            Inspect SSL/TLS certificates across homelab domains"
+  echo "  info <service> [--ssl]                   Display comprehensive application & Git diagnostics"
+  echo "  up <service>                             Start/build a service stack"
+  echo "  down <service>                           Stop and remove a service stack"
+  echo "  restart <service>                        Restart a service stack"
+  echo "  update <service>                         Full stack update (git pull -> compose pull -> recreate)"
+  echo "  pull <service>                           Pull latest images and recreate service"
+  echo "  logs <service>                           Stream service logs"
+  echo "  config <service>                         Validate and view resolved compose configuration"
+  echo "  sync                                     Synchronize Homepage dashboard services.yaml from app.yaml"
 }
 
 # Setup application environment based on resolved metadata
@@ -110,9 +111,12 @@ case "$COMMAND" in
   list|status)
     python3 "$ENGINE" list "${@:2}"
     ;;
+  ssl)
+    python3 "$ENGINE" ssl "${@:2}"
+    ;;
   info)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    python3 "$ENGINE" info "$APP"
+    python3 "$ENGINE" info "${@:2}"
     ;;
   sync)
     python3 "$ENGINE" sync "${@:2}"

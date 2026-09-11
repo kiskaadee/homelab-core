@@ -4,8 +4,11 @@ appctl_engine.py - Homelab Metadata Engine, Orchestration Parser & Git Sync Moni
 """
 
 import contextlib
+import datetime
 import json
 import os
+import socket
+import ssl
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -334,45 +337,216 @@ def get_core_services():
     return core_services
 
 
+def check_ssl_cert(domain, port=443, timeout=3.0):
+    """Inspect SSL/TLS certificate for a domain using standard library ssl and socket."""
+    if not domain or domain == "internal" or domain.endswith(".local") or ":" in domain:
+        return {
+            "domain": domain,
+            "status": "⚪ Internal",
+            "issuer": "-",
+            "subject": "-",
+            "days_remaining": None,
+            "not_after": "-",
+            "formatted_expiry": "-",
+            "error": None,
+        }
+
+    try:
+        ctx = ssl.create_default_context()
+        with (
+            socket.create_connection((domain, port), timeout=timeout) as sock,
+            ctx.wrap_socket(sock, server_hostname=domain) as ssock,
+        ):
+            cert = ssock.getpeercert()
+
+        not_after_str = cert.get("notAfter")
+        days_remaining = None
+        formatted_expiry = "-"
+        if not_after_str:
+            expiry_dt = datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z").replace(
+                tzinfo=datetime.timezone.utc
+            )
+            now_dt = datetime.datetime.now(datetime.timezone.utc)
+            days_remaining = (expiry_dt - now_dt).days
+            formatted_expiry = expiry_dt.strftime("%Y-%m-%d")
+
+        issuer_dict = dict(x[0] for x in cert.get("issuer", ()))
+        issuer = issuer_dict.get("organizationName") or issuer_dict.get("commonName") or "Unknown"
+
+        subject_dict = dict(x[0] for x in cert.get("subject", ()))
+        subject = subject_dict.get("commonName") or domain
+
+        if days_remaining is not None:
+            if days_remaining < 0:
+                status = f"🔴 Expired ({abs(days_remaining)}d ago)"
+            elif days_remaining <= 14:
+                status = f"🟡 {days_remaining}d remaining"
+            else:
+                status = f"🟢 {days_remaining}d remaining"
+        else:
+            status = "🟢 Valid"
+
+        return {
+            "domain": domain,
+            "status": status,
+            "issuer": issuer,
+            "subject": subject,
+            "days_remaining": days_remaining,
+            "not_after": not_after_str or "-",
+            "formatted_expiry": formatted_expiry,
+            "error": None,
+        }
+    except (ssl.SSLError, socket.gaierror, TimeoutError, ConnectionRefusedError, OSError, ValueError) as e:
+        return {
+            "domain": domain,
+            "status": "🔴 Failed",
+            "issuer": "-",
+            "subject": "-",
+            "days_remaining": None,
+            "not_after": "-",
+            "formatted_expiry": "-",
+            "error": str(e),
+        }
+
+
+def check_all_ssl_certs(domains):
+    """Check multiple domains concurrently with ThreadPoolExecutor."""
+    valid_domains = [d for d in set(domains) if d and d != "internal" and not d.endswith(".local") and ":" not in d]
+    results = {}
+    if not valid_domains:
+        return results
+
+    with ThreadPoolExecutor(max_workers=min(len(valid_domains), 8)) as executor:
+        future_to_domain = {executor.submit(check_ssl_cert, d): d for d in valid_domains}
+        for future, d in future_to_domain.items():
+            with contextlib.suppress(subprocess.SubprocessError, OSError):
+                results[d] = future.result()
+    return results
+
+
 def cmd_list(args):
-    """Format and print application and core stack listings with Git sync status."""
+    """Format and print application and core stack listings with Git sync status and optional SSL cert check."""
     show_core = any(a in ["--core", "-c", "--all", "-a"] for a in args)
     should_fetch = any(a in ["--fetch", "-f"] for a in args)
+    show_ssl = any(a in ["--ssl", "-s"] for a in args)
     apps = get_all_apps()
 
     if should_fetch:
         print("📡 Fetching remote updates across all repositories...")
         fetch_all_repositories(apps, include_core=show_core)
 
-    print(f"{'SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'DIRECTORY'}")
-    print(f"{'-------':<16} {'------':<15} {'--------':<15} {'------':<28} {'---------'}")
+    ssl_data = {}
+    if show_ssl:
+        domains_to_check = [app["domain"] for app in apps]
+        if show_core:
+            core_services = get_core_services()
+            domains_to_check.extend([svc["domain"] for svc in core_services])
+        print("🔒 Inspecting SSL/TLS certificates...")
+        ssl_data = check_all_ssl_certs(domains_to_check)
+
+    if show_ssl:
+        print(f"{'SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'CERT STATUS':<22} {'ISSUER'}")
+        print(f"{'-------':<16} {'------':<15} {'--------':<15} {'------':<28} {'-----------':<22} {'------'}")
+    else:
+        print(f"{'SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'DIRECTORY'}")
+        print(f"{'-------':<16} {'------':<15} {'--------':<15} {'------':<28} {'---------'}")
 
     for app in apps:
         status = get_docker_status(app["dir_path"])
         git_status = get_git_sync_status(app["dir_path"])
-        rel_dir = app["dir_path"].replace(os.path.expanduser("~"), "~")
-        print(f"{app['name']:<16} {status:<15} {git_status:<15} {app['domain']:<28} {rel_dir}")
+        if show_ssl:
+            cert_info = ssl_data.get(app["domain"], check_ssl_cert(app["domain"]))
+            print(f"{app['name']:<16} {status:<15} {git_status:<15} {app['domain']:<28} {cert_info['status']:<22} {cert_info['issuer']}")
+        else:
+            rel_dir = app["dir_path"].replace(os.path.expanduser("~"), "~")
+            print(f"{app['name']:<16} {status:<15} {git_status:<15} {app['domain']:<28} {rel_dir}")
 
     if show_core:
         core_git = get_git_sync_status(CORE_DIR)
         print()
-        print(f"{'CORE SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'DIRECTORY'}")
-        print(f"{'------------':<16} {'------':<15} {'--------':<15} {'------':<28} {'---------'}")
+        if show_ssl:
+            print(f"{'CORE SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'CERT STATUS':<22} {'ISSUER'}")
+            print(f"{'------------':<16} {'------':<15} {'--------':<15} {'------':<28} {'-----------':<22} {'------'}")
+        else:
+            print(f"{'CORE SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'DIRECTORY'}")
+            print(f"{'------------':<16} {'------':<15} {'--------':<15} {'------':<28} {'---------'}")
         core_services = get_core_services()
         rel_core = CORE_DIR.replace(os.path.expanduser("~"), "~")
         for i, svc in enumerate(core_services):
-            # Print core repo git status on the first row
             row_git = core_git if i == 0 else ""
-            print(f"{svc['name']:<16} {svc['status']:<15} {row_git:<15} {svc['domain']:<28} {rel_core}")
+            if show_ssl:
+                cert_info = ssl_data.get(svc["domain"], check_ssl_cert(svc["domain"]))
+                print(f"{svc['name']:<16} {svc['status']:<15} {row_git:<15} {svc['domain']:<28} {cert_info['status']:<22} {cert_info['issuer']}")
+            else:
+                print(f"{svc['name']:<16} {svc['status']:<15} {row_git:<15} {svc['domain']:<28} {rel_core}")
+
+
+def cmd_ssl(args):
+    """Check SSL/TLS certificates across services or for an individual service."""
+    targets = [a for a in args if not a.startswith("-")]
+
+    if targets:
+        for target in targets:
+            app = resolve_app(target)
+            domain = None
+            name = target
+            if app:
+                domain = app["domain"]
+                name = app["name"]
+            else:
+                for svc in get_core_services():
+                    if svc["name"].lower() == target.lower():
+                        domain = svc["domain"]
+                        name = svc["name"]
+                        break
+
+            if not domain:
+                print(f"❌ Error: Service '{target}' not found in ~/Sites or Core.")
+                continue
+
+            print(f"🔒 SSL/TLS Certificate: {name} ({domain})")
+            print("-" * 50)
+            cert_info = check_ssl_cert(domain)
+            print(f"Domain:          {cert_info['domain']}")
+            print(f"Status:          {cert_info['status']}")
+            print(f"Issuer:          {cert_info['issuer']}")
+            print(f"Subject:         {cert_info['subject']}")
+            print(f"Expiration:      {cert_info['not_after']}")
+            if cert_info["days_remaining"] is not None:
+                print(f"Days Remaining:  {cert_info['days_remaining']} days ({cert_info['formatted_expiry']})")
+            if cert_info["error"]:
+                print(f"Details/Error:   {cert_info['error']}")
+            print()
+        return
+
+    # Check all domains across apps and core
+    apps = get_all_apps()
+    services_to_check = [(app["name"], app["domain"]) for app in apps]
+    for svc in get_core_services():
+        if svc["domain"] != "internal":
+            services_to_check.append((f"{svc['name']} (core)", svc["domain"]))
+
+    domains = [d for _, d in services_to_check]
+    print(f"🔒 Checking SSL/TLS certificates for {len(domains)} service(s)...")
+    ssl_results = check_all_ssl_certs(domains)
+
+    print(f"\n{'SERVICE':<20} {'DOMAIN':<30} {'STATUS':<24} {'ISSUER':<20} {'EXPIRES'}")
+    print(f"{'-------':<20} {'------':<30} {'------':<24} {'------':<20} {'-------'}")
+
+    for name, domain in services_to_check:
+        info = ssl_results.get(domain, check_ssl_cert(domain))
+        print(f"{name:<20} {domain:<30} {info['status']:<24} {info['issuer']:<20} {info['formatted_expiry']}")
 
 
 def cmd_info(args):
     """Show detailed metadata, runtime overview, and Git diagnostics for a service."""
-    if not args:
+    clean_args = [a for a in args if not a.startswith("-")]
+    if not clean_args:
         print("❌ Error: Service name required for 'info' command")
         sys.exit(1)
 
-    query = args[0]
+    show_ssl = any(a in ["--ssl", "-s"] for a in args)
+    query = clean_args[0]
     app = resolve_app(query)
     if not app:
         # Check if it's a core service
@@ -385,7 +559,7 @@ def cmd_info(args):
                 print(f"Status:          {svc['status']}")
                 print(f"Primary Domain:  https://{svc['domain']}" if svc["domain"] != "internal" else f"Domain:          {svc['domain']}")
                 print(f"Description:     {svc['desc']}")
-                
+
                 core_diag = get_git_diagnostics(CORE_DIR)
                 if core_diag:
                     print("\nGit Repository (Core):")
@@ -395,6 +569,18 @@ def cmd_info(args):
                     print(f"  Sync Status:   {core_diag['sync_badge']}")
                     if core_diag["dirty_files"]:
                         print(f"  Dirty Files:   {len(core_diag['dirty_files'])} uncommitted file(s)")
+
+                if show_ssl and svc["domain"] != "internal":
+                    cert_info = check_ssl_cert(svc["domain"])
+                    print("\nSSL/TLS Certificate:")
+                    print(f"  Status:        {cert_info['status']}")
+                    print(f"  Issuer:        {cert_info['issuer']}")
+                    print(f"  Subject:       {cert_info['subject']}")
+                    print(f"  Expiration:    {cert_info['not_after']}")
+                    if cert_info["days_remaining"] is not None:
+                        print(f"  Days Left:     {cert_info['days_remaining']} day(s) ({cert_info['formatted_expiry']})")
+                    if cert_info["error"]:
+                        print(f"  Details/Error: {cert_info['error']}")
                 return
 
         print(f"❌ Error: Application '{query}' not found under {SITES_DIR}")
@@ -433,6 +619,18 @@ def cmd_info(args):
                 print(f"    - {f}")
             if len(git_diag["dirty_files"]) > 5:
                 print(f"    ... and {len(git_diag['dirty_files']) - 5} more")
+
+    if show_ssl and app["domain"] != "internal":
+        cert_info = check_ssl_cert(app["domain"])
+        print("\nSSL/TLS Certificate:")
+        print(f"  Status:        {cert_info['status']}")
+        print(f"  Issuer:        {cert_info['issuer']}")
+        print(f"  Subject:       {cert_info['subject']}")
+        print(f"  Expiration:    {cert_info['not_after']}")
+        if cert_info["days_remaining"] is not None:
+            print(f"  Days Left:     {cert_info['days_remaining']} day(s) ({cert_info['formatted_expiry']})")
+        if cert_info["error"]:
+            print(f"  Details/Error: {cert_info['error']}")
 
     if app["env"]:
         print("\nConfigured Environment Defaults:")
@@ -540,6 +738,8 @@ def main():
 
     if command == "list":
         cmd_list(args)
+    elif command == "ssl":
+        cmd_ssl(args)
     elif command == "info":
         cmd_info(args)
     elif command == "resolve":
