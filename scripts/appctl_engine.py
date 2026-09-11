@@ -650,10 +650,68 @@ def cmd_resolve(args):
     """Resolve service name and output JSON for the bash caller."""
     if not args:
         sys.exit(1)
-    app = resolve_app(args[0])
+    query = args[0].strip()
+    query_lower = query.lower()
+
+    if query_lower == "core":
+        print(json.dumps({
+            "type": "core",
+            "name": "core",
+            "dir_path": CORE_DIR,
+            "container": "",
+            "domain": "internal",
+            "has_compose": os.path.isfile(os.path.join(CORE_DIR, "docker-compose.yml")),
+        }))
+        return
+
+    # Check if query matches a core infrastructure service
+    for svc in get_core_services():
+        if svc["name"].lower() == query_lower:
+            print(json.dumps({
+                "type": "core_service",
+                "name": svc["name"],
+                "dir_path": CORE_DIR,
+                "container": svc["container"],
+                "domain": svc["domain"],
+                "has_compose": os.path.isfile(os.path.join(CORE_DIR, "docker-compose.yml")),
+            }))
+            return
+
+    # Check applications under SITES_DIR
+    app = resolve_app(query)
     if not app:
         sys.exit(1)
+    app["type"] = "app"
     print(json.dumps(app))
+
+
+def cmd_complete(args):
+    """Output completions for shell autocomplete."""
+    target = args[0] if args else "all"
+
+    commands = [
+        "list", "status", "ssl", "info", "up", "down",
+        "restart", "update", "pull", "logs", "config", "sync", "completion",
+    ]
+
+    if target == "commands":
+        print(" ".join(commands))
+        return
+
+    services = ["core"]
+    for svc in get_core_services():
+        services.append(svc["name"])
+
+    for app in get_all_apps():
+        services.append(app["name"])
+        for alias in app.get("aliases", []):
+            services.append(str(alias))
+
+    if target == "services":
+        print(" ".join(sorted(set(services))))
+        return
+
+    print(" ".join(sorted(set(commands + services))))
 
 
 def cmd_sync_homepage(args):
@@ -744,6 +802,8 @@ def main():
         cmd_info(args)
     elif command == "resolve":
         cmd_resolve(args)
+    elif command == "complete":
+        cmd_complete(args)
     elif command == "sync":
         cmd_sync_homepage(args)
     else:

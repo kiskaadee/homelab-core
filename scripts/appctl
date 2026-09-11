@@ -34,14 +34,15 @@ show_help() {
   echo "  list, status [--fetch] [--core] [--ssl]  List all applications with Git sync & container status"
   echo "  ssl [service]                            Inspect SSL/TLS certificates across homelab domains"
   echo "  info <service> [--ssl]                   Display comprehensive application & Git diagnostics"
-  echo "  up <service>                             Start/build a service stack"
-  echo "  down <service>                           Stop and remove a service stack"
-  echo "  restart <service>                        Restart a service stack"
+  echo "  up <service|core>                        Start/build a service stack or Core component"
+  echo "  down <service|core>                      Stop and remove a service stack or Core component"
+  echo "  restart <service|core>                   Restart a service stack, Core component, or entire Core"
   echo "  update <service>                         Full stack update (git pull -> compose pull -> recreate)"
-  echo "  pull <service>                           Pull latest images and recreate service"
-  echo "  logs <service>                           Stream service logs"
-  echo "  config <service>                         Validate and view resolved compose configuration"
+  echo "  pull <service|core>                      Pull latest images and recreate service or Core component"
+  echo "  logs <service|core>                      Stream service or Core component logs"
+  echo "  config <service|core>                    Validate and view resolved compose configuration"
   echo "  sync                                     Synchronize Homepage dashboard services.yaml from app.yaml"
+  echo "  completion [bash]                        Output shell autocompletion script"
 }
 
 # Setup application environment based on resolved metadata
@@ -51,13 +52,32 @@ setup_app_env() {
   resolved_json=$(python3 "$ENGINE" resolve "$query" 2>/dev/null || true)
 
   if [ -z "$resolved_json" ]; then
-    echo "❌ Error: Application '$query' not found under $SITES_DIR"
+    echo "❌ Error: Service '$query' not found under $SITES_DIR or Core"
     exit 1
   fi
 
   # Extract fields via python json
+  TARGET_TYPE=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('type', 'app'))" "$resolved_json")
   APP_DIR=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['dir_path'])" "$resolved_json")
   CANONICAL_NAME=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['name'])" "$resolved_json")
+  TARGET_CONTAINER=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('container', ''))" "$resolved_json")
+
+  if [ "$TARGET_TYPE" = "core" ] || [ "$TARGET_TYPE" = "core_service" ]; then
+    if [ ! -d "$CORE_DIR" ]; then
+      echo "❌ Error: Core directory not found at $CORE_DIR"
+      exit 1
+    fi
+    CORE_ENV_FILE="/run/secrets/rendered/homeserver.env"
+    if [ ! -f "$CORE_ENV_FILE" ] && [ -f "/run/secrets/homeserver.env" ]; then
+      CORE_ENV_FILE="/run/secrets/homeserver.env"
+    fi
+    COMPOSE_ENV_ARG=()
+    if [ -f "$CORE_ENV_FILE" ]; then
+      COMPOSE_ENV_ARG=(--env-file "$CORE_ENV_FILE")
+    fi
+    return
+  fi
+
   RESOLVED_DOMAIN=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['domain'])" "$resolved_json")
 
   # 1. Base infrastructure defaults
@@ -121,32 +141,145 @@ case "$COMMAND" in
   sync)
     python3 "$ENGINE" sync "${@:2}"
     ;;
+  complete)
+    python3 "$ENGINE" complete "${@:2}"
+    ;;
+  resolve)
+    python3 "$ENGINE" resolve "${@:2}"
+    ;;
+  completion)
+    cat <<'EOF'
+_appctl_completions() {
+    local cur prev words cword
+    if declare -F _init_completion >/dev/null 2>&1; then
+        _init_completion || return
+    else
+        COMPREPLY=()
+        cur="${COMP_WORDS[COMP_CWORD]}"
+        prev="${COMP_WORDS[COMP_CWORD-1]}"
+        words=("${COMP_WORDS[@]}")
+        cword=$COMP_CWORD
+    fi
+
+    local commands="list status ssl info up down restart update pull logs config sync completion"
+
+    if [ "$cword" -eq 1 ]; then
+        COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
+        return 0
+    fi
+
+    local command="${words[1]}"
+    local appctl_cmd="${words[0]}"
+
+    case "$command" in
+        list|status)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "--fetch -f --core -c --ssl -s --all -a" -- "$cur") )
+            fi
+            ;;
+        ssl)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "--core -c --all -a" -- "$cur") )
+            else
+                local services
+                services=$("$appctl_cmd" complete services 2>/dev/null || appctl complete services 2>/dev/null || true)
+                COMPREPLY=( $(compgen -W "$services" -- "$cur") )
+            fi
+            ;;
+        info)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "--ssl -s" -- "$cur") )
+            else
+                local services
+                services=$("$appctl_cmd" complete services 2>/dev/null || appctl complete services 2>/dev/null || true)
+                COMPREPLY=( $(compgen -W "$services" -- "$cur") )
+            fi
+            ;;
+        up|down|restart|update|pull|logs|config)
+            local services
+            services=$("$appctl_cmd" complete services 2>/dev/null || appctl complete services 2>/dev/null || true)
+            COMPREPLY=( $(compgen -W "$services" -- "$cur") )
+            ;;
+        completion)
+            COMPREPLY=( $(compgen -W "bash" -- "$cur") )
+            ;;
+    esac
+}
+complete -F _appctl_completions appctl
+EOF
+    ;;
   up)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    echo "🚀 Starting $CANONICAL_NAME ($APP_DIR)..."
-    cd "$APP_DIR" && docker compose up -d --remove-orphans "${@:3}"
-    python3 "$ENGINE" sync >/dev/null 2>&1 || true
+    if [ "$TARGET_TYPE" = "core" ]; then
+      echo "🚀 Starting Core stack ($CORE_DIR)..."
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" up -d --remove-orphans "${@:3}"
+    elif [ "$TARGET_TYPE" = "core_service" ]; then
+      echo "🚀 Starting Core service: $TARGET_CONTAINER ($CORE_DIR)..."
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" up -d --remove-orphans "$TARGET_CONTAINER" "${@:3}"
+    else
+      echo "🚀 Starting $CANONICAL_NAME ($APP_DIR)..."
+      cd "$APP_DIR" && docker compose up -d --remove-orphans "${@:3}"
+      python3 "$ENGINE" sync >/dev/null 2>&1 || true
+    fi
     ;;
   down)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    echo "🛑 Stopping $CANONICAL_NAME ($APP_DIR)..."
-    cd "$APP_DIR" && docker compose down "${@:3}"
-    python3 "$ENGINE" sync >/dev/null 2>&1 || true
+    if [ "$TARGET_TYPE" = "core" ]; then
+      echo "🛑 Stopping Core stack ($CORE_DIR)..."
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" down "${@:3}"
+    elif [ "$TARGET_TYPE" = "core_service" ]; then
+      echo "🛑 Stopping Core service: $TARGET_CONTAINER ($CORE_DIR)..."
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" stop "$TARGET_CONTAINER" "${@:3}"
+    else
+      echo "🛑 Stopping $CANONICAL_NAME ($APP_DIR)..."
+      cd "$APP_DIR" && docker compose down "${@:3}"
+      python3 "$ENGINE" sync >/dev/null 2>&1 || true
+    fi
     ;;
   restart)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    echo "🔄 Restarting $CANONICAL_NAME ($APP_DIR)..."
-    cd "$APP_DIR" && docker compose down && docker compose up -d "${@:3}"
-    python3 "$ENGINE" sync >/dev/null 2>&1 || true
+    if [ "$TARGET_TYPE" = "core" ]; then
+      if [ -n "$3" ] && [[ "$3" != -* ]]; then
+        echo "🔄 Restarting Core service: $3 ($CORE_DIR)..."
+        cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" restart "$3" "${@:4}"
+      else
+        echo "🔄 Restarting Core stack ($CORE_DIR)..."
+        cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" restart "${@:3}"
+      fi
+    elif [ "$TARGET_TYPE" = "core_service" ]; then
+      echo "🔄 Restarting Core service: $TARGET_CONTAINER ($CORE_DIR)..."
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" restart "$TARGET_CONTAINER" "${@:3}"
+    else
+      echo "🔄 Restarting $CANONICAL_NAME ($APP_DIR)..."
+      cd "$APP_DIR" && docker compose down && docker compose up -d "${@:3}"
+      python3 "$ENGINE" sync >/dev/null 2>&1 || true
+    fi
     ;;
   update)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
+    if [ "$TARGET_TYPE" = "core" ]; then
+      echo "🔄 Updating Core stack ($CORE_DIR)..."
+      if [ -d "$CORE_DIR/.git" ]; then
+        if [ -n "$(git -C "$CORE_DIR" status --porcelain)" ]; then
+          echo "❌ Error: Cannot update. Working tree in $CORE_DIR has uncommitted changes."
+          exit 1
+        fi
+        echo "📥 Pulling latest git changes for Core..."
+        git -C "$CORE_DIR" pull --ff-only
+      fi
+      echo "🐳 Pulling latest Core container images..."
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" pull
+      echo "🚀 Recreating Core container stack..."
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" up -d --remove-orphans "${@:3}"
+      echo "✨ Core successfully updated!"
+      exit 0
+    fi
+
     echo "🔄 Updating $CANONICAL_NAME ($APP_DIR)..."
-    
     if [ -d "$APP_DIR/.git" ]; then
       if [ -n "$(git -C "$APP_DIR" status --porcelain)" ]; then
         echo "❌ Error: Cannot update. Working tree in $APP_DIR has uncommitted changes."
@@ -169,18 +302,40 @@ case "$COMMAND" in
   pull)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    echo "📥 Pulling latest images for $CANONICAL_NAME..."
-    cd "$APP_DIR" && docker compose pull && docker compose up -d --remove-orphans "${@:3}"
+    if [ "$TARGET_TYPE" = "core" ]; then
+      echo "📥 Pulling latest images for Core stack..."
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" pull "${@:3}"
+    elif [ "$TARGET_TYPE" = "core_service" ]; then
+      echo "📥 Pulling latest image for Core service: $TARGET_CONTAINER..."
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" pull "$TARGET_CONTAINER" "${@:3}"
+    else
+      echo "📥 Pulling latest images for $CANONICAL_NAME..."
+      cd "$APP_DIR" && docker compose pull && docker compose up -d --remove-orphans "${@:3}"
+    fi
     ;;
   logs)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    cd "$APP_DIR" && docker compose logs -f "${@:3}"
+    if [ "$TARGET_TYPE" = "core" ]; then
+      if [ -n "$3" ] && [[ "$3" != -* ]]; then
+        cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" logs -f "$3" "${@:4}"
+      else
+        cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" logs -f "${@:3}"
+      fi
+    elif [ "$TARGET_TYPE" = "core_service" ]; then
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" logs -f "$TARGET_CONTAINER" "${@:3}"
+    else
+      cd "$APP_DIR" && docker compose logs -f "${@:3}"
+    fi
     ;;
   config)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
     setup_app_env "$APP"
-    cd "$APP_DIR" && docker compose config
+    if [ "$TARGET_TYPE" = "core" ] || [ "$TARGET_TYPE" = "core_service" ]; then
+      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" config "${@:3}"
+    else
+      cd "$APP_DIR" && docker compose config "${@:3}"
+    fi
     ;;
   *)
     show_help
