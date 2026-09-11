@@ -11,6 +11,7 @@
     ./modules/homeserver.nix          # Core services: systemd units, Authelia, SOPS secrets
     ./modules/traefik-deployments.nix # Traefik deployment secrets and env templates
     ./modules/dynu.nix                # Dynu DDNS smart IP monitor service
+    ./modules/shell.nix               # Declarative bash environment for the server
   ];
 
   # ── SOPS secrets configuration ──────────────────────────────────────────────
@@ -99,10 +100,6 @@
     enable = true;
     defaultEditor = true;
   };
-
-  # Shell enhancements — NixOS-level options handle both install and shell init
-  programs.zoxide.enable = true;    # smart cd; initialises in bash/zsh automatically
-  programs.starship.enable = true;  # cross-shell prompt
 
   environment.systemPackages = with pkgs; [
     # Monitoring & diagnostics
