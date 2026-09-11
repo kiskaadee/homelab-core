@@ -1,0 +1,11 @@
+keys:
+  - &server age18q3lr2z4yeg2f86my42ym4hx0dvcwgjshmchyhdkgwvf4k37dsyq3mcjse
+  - &laptop age1pln9sxy5j93lklqklfwp3qepx7x4cs4y2w63n9y3ykt68qgra5ysqleesg
+
+creation_rules:
+  - path_regex: nixos/secrets\.yaml$
+    key_groups:
+      - pgp: []
+        age:
+          - *server
+          - *laptop

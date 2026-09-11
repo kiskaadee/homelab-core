@@ -13,7 +13,7 @@ This repository is the central control plane for the `roadtotech.me` homelab clu
    - `socket-proxy` must remain restricted to read-only endpoints (`POST=0`, `DELETE=0`).
 3. **Zero Hardcoded Secrets**:
    - Never commit raw `.env` files, password strings, database files (`*.db`, `*.sqlite3`), or SSL certificates (`acme.json`, `*.key`).
-   - All runtime secrets are managed declaratively in `~/Config/hosts/desktop/secrets.yaml` via SOPS and rendered to `/run/secrets/rendered/`.
+   - All runtime secrets are managed declaratively in `nixos/secrets.yaml` via SOPS and rendered to `/run/secrets/` at boot.
 4. **License Invariant**:
    - Preserve and maintain `The Unlicense` (public domain) across all Core and Sites repositories.
 
