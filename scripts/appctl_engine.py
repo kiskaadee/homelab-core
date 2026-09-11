@@ -3,11 +3,11 @@
 appctl_engine.py - Homelab Metadata Engine, Orchestration Parser & Git Sync Monitor
 """
 
-import os
-import sys
+import contextlib
 import json
+import os
 import subprocess
-import shutil
+import sys
 from concurrent.futures import ThreadPoolExecutor
 
 SITES_DIR = os.environ.get("SITES_DIR", os.path.expanduser("~/Sites"))
@@ -77,10 +77,11 @@ def get_all_apps():
         manifest_path = os.path.join(app_dir, "app.yaml")
         manifest = {}
         if os.path.isfile(manifest_path):
-            try:
-                manifest = parse_yaml_simple(open(manifest_path).read())
-            except Exception:
-                pass
+            with (
+                contextlib.suppress(OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError),
+                open(manifest_path, encoding="utf-8") as f,
+            ):
+                manifest = parse_yaml_simple(f.read())
 
         canonical_name = manifest.get("name") or entry.replace("homelab-", "")
         aliases = manifest.get("aliases") or []
@@ -167,7 +168,7 @@ def get_docker_status(dir_path):
             return f"🟡 Degraded ({running_count}/{total_count})"
         else:
             return "🔴 Stopped"
-    except Exception:
+    except (subprocess.SubprocessError, OSError):
         return "❓ Unknown"
 
 
@@ -229,7 +230,7 @@ def get_git_sync_status(dir_path):
             badge += " *"
 
         return badge
-    except Exception:
+    except (subprocess.SubprocessError, OSError, ValueError):
         return "❓ Unknown"
 
 
@@ -239,7 +240,7 @@ def get_git_diagnostics(dir_path):
         return None
 
     diag = {}
-    try:
+    with contextlib.suppress(subprocess.SubprocessError, OSError):
         branch = subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"],
             cwd=dir_path,
@@ -277,15 +278,13 @@ def get_git_diagnostics(dir_path):
             check=False,
         ).stdout.strip()
         diag["dirty_files"] = status_porcelain.splitlines() if status_porcelain else []
-    except Exception:
-        pass
     return diag
 
 
 def fetch_repository(dir_path):
     """Run git fetch on a single repository with timeout."""
     if os.path.isdir(os.path.join(dir_path, ".git")):
-        try:
+        with contextlib.suppress(subprocess.SubprocessError, OSError):
             subprocess.run(
                 ["git", "fetch", "--quiet"],
                 cwd=dir_path,
@@ -294,8 +293,6 @@ def fetch_repository(dir_path):
                 timeout=10,
                 check=False,
             )
-        except Exception:
-            pass
 
 
 def fetch_all_repositories(apps, include_core=True):
@@ -332,7 +329,7 @@ def get_core_services():
                 svc["status"] = "🟢 Running (1)"
             else:
                 svc["status"] = "🔴 Stopped"
-        except Exception:
+        except (subprocess.SubprocessError, OSError):
             svc["status"] = "❓ Unknown"
     return core_services
 

@@ -7,11 +7,11 @@ in ~/Sites (via app.yaml) or data vaults (like ~/Brain), and executes the declar
 deployment actions with zero Core restarts.
 """
 
-import sys
-import os
 import json
-import subprocess
 import logging
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 SITES_DIR = Path(os.environ.get("SITES_DIR", os.path.expanduser("~/Sites")))
@@ -23,6 +23,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] [GitOps] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
+logger = logging.getLogger("gitops_dispatcher")
 
 
 def parse_yaml_simple(text: str) -> dict:
@@ -103,8 +104,8 @@ def resolve_target(repo_name: str) -> tuple[Path | None, dict]:
             if manifest_file.is_file():
                 try:
                     manifest = parse_yaml_simple(manifest_file.read_text())
-                except Exception as e:
-                    logging.warning(f"Failed to parse {manifest_file}: {e}")
+                except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+                    logger.warning(f"Failed to parse {manifest_file}: {e}")
 
             deployment_config = manifest.get("deployment")
             if not isinstance(deployment_config, dict):
@@ -125,8 +126,8 @@ def resolve_target(repo_name: str) -> tuple[Path | None, dict]:
                 target_path = Path(entry.get("path", ""))
                 if target_path.is_dir():
                     return target_path, entry.get("deployment", {"branch": "main", "actions": ["git_pull"]})
-        except Exception as e:
-            logging.warning(f"Failed to parse custom registry {registry_file}: {e}")
+        except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+            logger.warning(f"Failed to parse custom registry {registry_file}: {e}")
 
     return None, {}
 
@@ -135,16 +136,16 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
     """Execute declared deployment actions sequentially."""
     expected_branch = deployment_config.get("branch", "main")
     if branch and branch != expected_branch:
-        logging.info(f"Skipping deployment: pushed branch '{branch}' != target branch '{expected_branch}'")
+        logger.info(f"Skipping deployment: pushed branch '{branch}' != target branch '{expected_branch}'")
         return True
 
-    logging.info(f"🚀 Deploying '{target_dir.name}' at {target_dir} (branch: {expected_branch})...")
+    logger.info(f"🚀 Deploying '{target_dir.name}' at {target_dir} (branch: {expected_branch})...")
     actions = deployment_config.get("actions", ["git_pull"])
 
     try:
         for action in actions:
             if action == "git_pull":
-                logging.info(f"  ↳ [git_pull] Pulling latest '{expected_branch}'...")
+                logger.info(f"  ↳ [git_pull] Pulling latest '{expected_branch}'...")
                 subprocess.run(
                     ["git", "-C", str(target_dir), "pull", "--ff-only", "origin", expected_branch],
                     check=True
@@ -152,7 +153,7 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
             elif action == "compose_up":
                 compose_file = target_dir / "docker-compose.yml"
                 if compose_file.is_file():
-                    logging.info("  ↳ [compose_up] Recreating containers (docker compose up -d)...")
+                    logger.info("  ↳ [compose_up] Recreating containers (docker compose up -d)...")
                     subprocess.run(
                         ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"],
                         check=True
@@ -160,7 +161,7 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
             elif action == "compose_build":
                 compose_file = target_dir / "docker-compose.yml"
                 if compose_file.is_file():
-                    logging.info("  ↳ [compose_build] Building & recreating containers...")
+                    logger.info("  ↳ [compose_build] Building & recreating containers...")
                     subprocess.run(
                         ["docker", "compose", "-f", str(compose_file), "build"],
                         check=True
@@ -172,25 +173,25 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
             elif action == "compose_restart":
                 compose_file = target_dir / "docker-compose.yml"
                 if compose_file.is_file():
-                    logging.info("  ↳ [compose_restart] Restarting containers...")
+                    logger.info("  ↳ [compose_restart] Restarting containers...")
                     subprocess.run(
                         ["docker", "compose", "-f", str(compose_file), "restart"],
                         check=True
                     )
             elif isinstance(action, dict) and "custom" in action:
                 cmd = action["custom"]
-                logging.info(f"  ↳ [custom] Executing: {cmd}")
+                logger.info(f"  ↳ [custom] Executing: {cmd}")
                 subprocess.run(cmd, shell=True, cwd=str(target_dir), check=True)
             else:
-                logging.warning(f"  ↳ Unknown action '{action}'; skipping.")
+                logger.warning(f"  ↳ Unknown action '{action}'; skipping.")
 
-        logging.info(f"✨ Deployment of '{target_dir.name}' completed successfully.")
+        logger.info(f"✨ Deployment of '{target_dir.name}' completed successfully.")
         return True
     except subprocess.CalledProcessError as e:
-        logging.error(f"❌ Deployment step failed with exit code {e.returncode}: {e}")
+        logger.error(f"❌ Deployment step failed with exit code {e.returncode}: {e}")
         return False
-    except Exception as e:
-        logging.error(f"❌ Unexpected deployment error: {e}")
+    except (subprocess.SubprocessError, OSError, KeyError, TypeError, ValueError, RuntimeError) as e:
+        logger.error(f"❌ Unexpected deployment error: {e}")
         return False
 
 
@@ -217,7 +218,7 @@ def main():
             payload_raw = sys.stdin.read().strip()
 
         if not payload_raw:
-            logging.error("No webhook payload provided (checked sys.argv and stdin).")
+            logger.error("No webhook payload provided (checked sys.argv and stdin).")
             sys.exit(1)
 
         try:
@@ -226,18 +227,18 @@ def main():
             ref = payload.get("ref", "refs/heads/main")
             branch = ref.replace("refs/heads/", "")
         except json.JSONDecodeError as e:
-            logging.error(f"Invalid JSON payload: {e}")
+            logger.error(f"Invalid JSON payload: {e}")
             sys.exit(1)
 
     if not repo_name:
-        logging.error("No repository name found in payload.")
+        logger.error("No repository name found in payload.")
         sys.exit(1)
 
-    logging.info(f"Incoming webhook event: repository='{repo_name}', branch='{branch}'")
+    logger.info(f"Incoming webhook event: repository='{repo_name}', branch='{branch}'")
     target_dir, deployment_config = resolve_target(repo_name)
 
     if not target_dir or not target_dir.is_dir():
-        logging.warning(f"No valid deployment target directory found on host for '{repo_name}'. Ignoring.")
+        logger.warning(f"No valid deployment target directory found on host for '{repo_name}'. Ignoring.")
         sys.exit(0)
 
     success = execute_deployment(target_dir, deployment_config, branch)
