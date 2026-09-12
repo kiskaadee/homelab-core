@@ -29,8 +29,8 @@ The most critical security feature. No container (including Traefik or Portainer
 Despite the hardening, you should remain vigilant about the following:
 
 ### 1. Host-Level Security (The Foundation)
-If an attacker gains SSH access to your Arch Linux host, they have total control.
-- **Action**: Use SSH Keys only (disable password login). Install `fail2ban`. Keep the host kernel updated (`pacman -Syu`).
+If an attacker gains SSH access to your host, they have control over the system.
+- **Action**: Use SSH Keys exclusively (`PermitRootLogin = "no"` is enforced by NixOS). Keep your Nix flake inputs and system updated (`sudo nixos-rebuild switch --flake ~/Core#server`).
 
 ### 2. Application-Specific Vulnerabilities
 A zero-day exploit in Gitea or Ollama could allow an attacker to execute code *inside* that specific container.

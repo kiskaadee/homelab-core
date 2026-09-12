@@ -45,17 +45,17 @@ User and service applications (e.g. `dashboard`, `docs`, `jellyfin`, `excalidraw
 
 The security model is built on zero hardcoded secrets and defense-in-depth:
 
-```
-[~/Config/hosts/desktop/secrets.yaml] (Encrypted with SOPS + age keys)
+```text
+[nixos/secrets.yaml] (Encrypted with SOPS + age keys)
        │
-       ▼ (Decrypted at boot by sops-nix using SSH host key)
+       ▼ (Decrypted at boot by sops-nix using host SSH key)
 [/run/secrets/rendered/homeserver.env] & [/run/secrets/rendered/traefik-deployments.env]
        │
        ▼ (Fed via --env-file and appctl)
 [Core & Sites Containers]
 ```
 
-1. **SOPS & sops-nix Integration:** All sensitive tokens (Dynu API key, Authelia session secrets, JWT keys, database passwords) are encrypted in `~/Config/hosts/desktop/secrets.yaml` and decrypted by NixOS at runtime into in-memory `/run/secrets/rendered/`.
+1. **SOPS & sops-nix Integration:** All sensitive tokens (Dynu API key, Authelia session secrets, JWT keys, database passwords) are encrypted in `nixos/secrets.yaml` and decrypted by NixOS at runtime into in-memory `/run/secrets/` and `/run/secrets/rendered/`.
 2. **Edge TLS & HSTS:** All external traffic is forced over HTTPS using Let's Encrypt wildcard certificates with strict redirect schemes (`https-redirect@docker`).
 3. **Authelia ForwardAuth:** Applications that require authentication declare `traefik.http.routers.<name>.middlewares=authelia-auth@docker`, delegating identity verification to Authelia.
 4. **Socket Isolation:** Direct Docker daemon sockets are completely hidden behind `socket-proxy`.
@@ -170,15 +170,42 @@ appctl up myapp
 
 ---
 
-## ⚙️ NixOS Service Management
+## ❄️ Declarative NixOS Appliance
+ 
+This repository is a self-contained NixOS appliance. It defines the operating system, Docker infrastructure, firewall rules, automated DDNS updates, and host shell environment in a single flake.
 
-The Core Control Plane runs as a native systemd unit managed declaratively by NixOS:
+### Repository NixOS Layout:
+* **[`flake.nix`](flake.nix)** — Flake entrypoint defining `nixosConfigurations.server`.
+* **[`nixos/configuration.nix`](nixos/configuration.nix)** — Standalone headless host configuration (locale, SSH, Docker, packages).
+* **[`nixos/hardware-configuration.nix`](nixos/hardware-configuration.nix)** — Server hardware, disk mounts, and kernel parameters.
+* **[`nixos/secrets.yaml`](nixos/secrets.yaml)** — SOPS-encrypted secrets for the server.
+* **[`nixos/modules/homeserver.nix`](nixos/modules/homeserver.nix)** — `homeserver-core.service`, `homelab-gitops.service`, and Authelia secrets.
+* **[`nixos/modules/traefik-deployments.nix`](nixos/modules/traefik-deployments.nix)** — Traefik applications environment secrets (`traefik-deployments.env`).
+* **[`nixos/modules/dynu.nix`](nixos/modules/dynu.nix)** — Dynu DDNS smart IP monitor timer and ddclient credentials.
+* **[`nixos/modules/shell.nix`](nixos/modules/shell.nix)** — Server-tailored bash shell profile, aliases, and utilities.
 
-* **Service Unit:** `homeserver-core.service`
-* **Nix Module:** [`~/Config/hosts/desktop/homeserver.nix`](file:///home/kiskaadee/Config/hosts/desktop/homeserver.nix)
-* **Status Inspection:** `systemctl status homeserver-core`
-* **Logs:** `journalctl -u homeserver-core -f`
-* **Restart:** `sudo systemctl restart homeserver-core`
+### Common Operations:
+```bash
+# Rebuild and switch the running system
+sudo nixos-rebuild switch --flake ~/Core#server
+# (or use the built-in alias: nix-switch)
+
+# Inspect core service units
+systemctl status homeserver-core
+journalctl -u homeserver-core -f
+
+# Inspect GitOps webhook dispatcher
+systemctl status homelab-gitops
+
+# Inspect dynamic IP monitor
+systemctl status dynu-monitor
+```
+
+### Disaster Recovery:
+Any clean machine can be provisioned into this server:
+```bash
+nixos-install --flake ~/Core#server
+```
 
 ---
 

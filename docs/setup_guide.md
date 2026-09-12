@@ -22,8 +22,8 @@ All sensitive tokens, encryption keys, and credentials are encrypted using **`so
 
 ### Secrets Lifecycle:
 
-```
-[~/Config/hosts/desktop/secrets.yaml] (Encrypted with Age)
+```text
+[nixos/secrets.yaml] (Encrypted with Age)
        │
        ▼ (Decrypted at boot by sops-nix daemon)
 1. [/run/secrets/rendered/homeserver.env]          --> Fed to Core Compose Stack
@@ -39,54 +39,55 @@ All sensitive tokens, encryption keys, and credentials are encrypted using **`so
 
 To update credentials (e.g. changing your Dynu API key or updating Authelia user passwords):
 
-1. Navigate to your NixOS configuration repository:
+1. Navigate to the core repository:
    ```bash
-   cd ~/Config
+   cd ~/Core
    ```
 2. Decrypt and open the secrets file in your editor:
    ```bash
-   nix-shell -p sops --run "sops hosts/desktop/secrets.yaml"
+   sops nixos/secrets.yaml
    ```
 3. Update or append keys under the root block:
    ```yaml
-   dynu_api_key: "your_dynu_api_key"
-   acme_email: "your_email@domain.com"
-   authelia_session_secret: "secure_64_char_secret"
-   authelia_storage_encryption_key: "secure_64_char_key"
-   authelia_identity_validation_reset_password_jwt_secret: "secure_64_char_jwt_secret"
-   authelia_user_kiskaadee_password_hash: "$argon2id$v=19$m=65536..."
+   dynu:
+     api_key: "your_dynu_api_key"
+   traefik:
+     acme_email: "your_email@domain.com"
+   authelia:
+     session_secret: "secure_64_char_secret"
+     storage_encryption_key: "secure_64_char_key"
+     jwt_secret: "secure_64_char_jwt_secret"
+     users:
+       kiskaadee:
+         password_hash: "$argon2id$v=19$m=65536..."
    ```
    *To generate an Argon2 password hash securely, run:*
    ```bash
    docker run --rm -it authelia/authelia:latest authelia crypto hash generate argon2
    ```
 4. Save and close. SOPS will automatically encrypt the modified file before saving.
+5. Rebuild the system to apply new secret templates:
+   ```bash
+   sudo nixos-rebuild switch --flake ~/Core#server
+   ```
 
 ---
 
 ## ⚙️ Declarative NixOS Modules
 
-The Core stack and deployment environments are defined declaratively in `~/Config`:
+The Core stack and deployment environments are defined declaratively in `nixos/modules/`:
 
-### 1. Control Plane Module ([`hosts/desktop/homeserver.nix`](file:///home/kiskaadee/Config/hosts/desktop/homeserver.nix))
-Generates `/run/secrets/rendered/homeserver.env` and manages the `homeserver-core.service` systemd daemon:
-```nix
-sops.templates."homeserver.env" = {
-  owner = "kiskaadee";
-  content = lib.generators.toKeyValue {} {
-    DOMAIN = "roadtotech.me";
-    DOCKER_API_VERSION = "1.40";
-    DYNU_API_KEY = config.sops.placeholder.dynu_api_key;
-    ACME_EMAIL = config.sops.placeholder.acme_email;
-    AUTHELIA_SESSION_SECRET = config.sops.placeholder.authelia_session_secret;
-    AUTHELIA_STORAGE_ENCRYPTION_KEY = config.sops.placeholder.authelia_storage_encryption_key;
-    AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET = config.sops.placeholder.authelia_identity_validation_reset_password_jwt_secret;
-  };
-};
-```
+### 1. Control Plane Module ([`nixos/modules/homeserver.nix`](../nixos/modules/homeserver.nix))
+Generates `/run/secrets/rendered/homeserver.env`, `/run/secrets/rendered/users.yml`, and manages the `homeserver-core.service` and `homelab-gitops.service` systemd daemons.
 
-### 2. Applications Secret Module ([`hosts/desktop/traefik-deployments.nix`](file:///home/kiskaadee/Config/hosts/desktop/traefik-deployments.nix))
+### 2. Applications Secret Module ([`nixos/modules/traefik-deployments.nix`](../nixos/modules/traefik-deployments.nix))
 Generates `/run/secrets/rendered/traefik-deployments.env` consumed by `appctl`.
+
+### 3. Dynamic DNS Module ([`nixos/modules/dynu.nix`](../nixos/modules/dynu.nix))
+Configures the smart IP monitor timer and updates ddclient when IP rotations occur.
+
+### 4. Server Shell Module ([`nixos/modules/shell.nix`](../nixos/modules/shell.nix))
+Defines interactive bash aliases, git helpers, and terminal tools via system `/etc/bashrc`.
 
 ---
 
