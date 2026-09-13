@@ -83,6 +83,7 @@ def parse_yaml_simple(text: str) -> dict:
     """Lightweight, zero-dependency YAML parser tailored for app.yaml manifests."""
     data = {}
     current_section = None
+    current_subsection = None
     lines = text.splitlines()
 
     for line in lines:
@@ -95,9 +96,14 @@ def parse_yaml_simple(text: str) -> dict:
         if stripped.startswith("- "):
             item = stripped[2:].strip().strip("\"'")
             if current_section:
-                if not isinstance(data.get(current_section), list):
-                    data[current_section] = []
-                data[current_section].append(item)
+                if current_subsection and isinstance(data.get(current_section), dict):
+                    if not isinstance(data[current_section].get(current_subsection), list):
+                        data[current_section][current_subsection] = []
+                    data[current_section][current_subsection].append(item)
+                else:
+                    if not isinstance(data.get(current_section), list):
+                        data[current_section] = []
+                    data[current_section].append(item)
             continue
 
         if ":" in stripped:
@@ -114,6 +120,7 @@ def parse_yaml_simple(text: str) -> dict:
 
             if indent == 0:
                 current_section = k
+                current_subsection = None
                 if v == "":
                     data[k] = {}
                 else:
@@ -121,7 +128,11 @@ def parse_yaml_simple(text: str) -> dict:
             elif indent > 0 and current_section:
                 if not isinstance(data.get(current_section), dict):
                     data[current_section] = {}
-                data[current_section][k] = v
+                current_subsection = k
+                if v == "":
+                    data[current_section][k] = []
+                else:
+                    data[current_section][k] = v
 
     return data
 
@@ -351,11 +362,129 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
         return False
 
 
+ALLOWED_ACTIONS = {"git_pull", "compose_up", "compose_build", "compose_restart"}
+ALLOWED_STRATEGIES = {"compose"}
+
+
+def validate_manifest_deployment(manifest: dict) -> tuple[bool, str]:
+    """
+    Validate deployment policy inside app.yaml.
+    Rejects unsupported deployment strategies or unknown actions.
+    """
+    deployment = manifest.get("deployment")
+    if deployment is None:
+        return True, ""
+
+    if not isinstance(deployment, dict):
+        return False, "Field 'deployment' must be a mapping/dictionary."
+
+    # Validate strategy if specified
+    strategy = deployment.get("strategy")
+    if strategy is not None and strategy not in ALLOWED_STRATEGIES:
+        return False, f"Unsupported deployment strategy '{strategy}'. Allowed strategies: {sorted(ALLOWED_STRATEGIES)}"
+
+    # Validate actions if specified
+    actions = deployment.get("actions")
+    if actions is not None:
+        if not isinstance(actions, list):
+            return False, "Field 'deployment.actions' must be a list of strings."
+        for action in actions:
+            if not isinstance(action, str) or action not in ALLOWED_ACTIONS:
+                return False, f"Unsupported deployment action '{action}'. Allowed actions: {sorted(ALLOWED_ACTIONS)}"
+
+    return True, ""
+
+
+def admit_deployment(
+    payload: dict,
+    event_type: str | None = None
+) -> tuple[bool, Path | None, dict, str, str]:
+    """
+    Evaluate webhook deployment admission against strict policy gates:
+    1. Event Admission (must be a push event, rejects PRs, tags, releases)
+    2. Ref Format (must be 'refs/heads/<branch>')
+    3. Repository Admission (must resolve against trusted mapping)
+    4. Manifest & Strategy Validation (app.yaml must be valid)
+    5. Branch Policy Admission (pushed branch must match declared deployment branch)
+
+    Returns: (admitted: bool, target_dir: Path | None, deployment_config: dict, branch: str, reason: str)
+    """
+    # 1. Event Admission
+    if event_type and event_type.strip().lower() != "push":
+        return False, None, {}, "", f"Event '{event_type}' is not eligible for deployment. Only 'push' is allowed."
+
+    if "pull_request" in payload or "issue" in payload or "release" in payload:
+        return False, None, {}, "", "Payload represents non-push event (pull_request/issue/release). Rejected."
+
+    # 2. Ref Admission
+    ref = payload.get("ref", "")
+    if not isinstance(ref, str) or not ref:
+        return False, None, {}, "", "Missing or invalid 'ref' in payload."
+
+    if ref.startswith("refs/tags/"):
+        return False, None, {}, "", f"Tag push '{ref}' is not deployable."
+
+    if not ref.startswith("refs/heads/"):
+        return False, None, {}, "", f"Ref '{ref}' is not a head branch. Only 'refs/heads/*' is supported."
+
+    pushed_branch = ref.removeprefix("refs/heads/")
+    if not pushed_branch:
+        return False, None, {}, "", "Empty branch name extracted from ref."
+
+    # 3. Repository Admission
+    repo_field = payload.get("repository")
+    if not isinstance(repo_field, dict):
+        return False, None, {}, pushed_branch, "Missing or invalid 'repository' object in payload."
+
+    repo_name = repo_field.get("name")
+    if not isinstance(repo_name, str) or not repo_name.strip():
+        return False, None, {}, pushed_branch, "Missing or empty repository name in payload."
+
+    repo_name = repo_name.strip()
+    target_dir = resolve_repository(repo_name)
+    if not target_dir:
+        return False, None, {}, pushed_branch, f"Repository '{repo_name}' is not recognized in trusted registry."
+
+    # 4. Manifest & Strategy Validation
+    if BRAIN_DIR.is_dir() and target_dir == BRAIN_DIR.resolve():
+        deployment_config = {"branch": "main", "actions": ["git_pull"]}
+    else:
+        manifest_file = target_dir / "app.yaml"
+        manifest = {}
+        if manifest_file.is_file():
+            try:
+                manifest = parse_yaml_simple(manifest_file.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+                return False, None, {}, pushed_branch, f"Failed to parse manifest {manifest_file}: {e}"
+
+            valid, err_msg = validate_manifest_deployment(manifest)
+            if not valid:
+                return False, None, {}, pushed_branch, f"Manifest validation error: {err_msg}"
+
+        deployment_config = manifest.get("deployment")
+        if not isinstance(deployment_config, dict):
+            deployment_config = {
+                "branch": "main",
+                "actions": ["git_pull", "compose_up"]
+            }
+
+    # 5. Branch Policy Admission
+    expected_branch = deployment_config.get("branch", "main")
+    if pushed_branch != expected_branch:
+        return False, target_dir, deployment_config, pushed_branch, (
+            f"Branch mismatch: pushed branch '{pushed_branch}' does not match "
+            f"declared target branch '{expected_branch}'."
+        )
+
+    return True, target_dir, deployment_config, pushed_branch, f"Admitted for deployment on branch '{pushed_branch}'."
+
+
 def main():
     payload_raw = ""
     repo_name = ""
     branch = "main"
     signature = None
+    event_type = None
 
     if "--signature" in sys.argv:
         sig_idx = sys.argv.index("--signature")
@@ -368,6 +497,17 @@ def main():
     elif os.environ.get("X_GITEA_SIGNATURE"):
         signature = os.environ.get("X_GITEA_SIGNATURE")
 
+    if "--event" in sys.argv:
+        ev_idx = sys.argv.index("--event")
+        if ev_idx + 1 < len(sys.argv):
+            event_type = sys.argv[ev_idx + 1]
+    elif len(sys.argv) > 3 and not sys.argv[3].startswith("-"):
+        event_type = sys.argv[3]
+    elif os.environ.get("HTTP_X_GITEA_EVENT"):
+        event_type = os.environ.get("HTTP_X_GITEA_EVENT")
+    elif os.environ.get("X_GITEA_EVENT"):
+        event_type = os.environ.get("X_GITEA_EVENT")
+
     # Support CLI arguments for manual trigger: --repo <name> [--branch <branch>]
     if "--repo" in sys.argv:
         idx = sys.argv.index("--repo")
@@ -377,6 +517,13 @@ def main():
             b_idx = sys.argv.index("--branch")
             if b_idx + 1 < len(sys.argv):
                 branch = sys.argv[b_idx + 1].replace("refs/heads/", "")
+        logger.info(f"Local manual trigger: repository='{repo_name}', branch='{branch}'")
+        target_dir, deployment_config = resolve_target(repo_name)
+        if not target_dir or not target_dir.is_dir():
+            logger.error(f"Target repository '{repo_name}' could not be resolved.")
+            sys.exit(1)
+        success = execute_deployment(target_dir, deployment_config, branch)
+        sys.exit(0 if success else 1)
     else:
         # 1. Check if first argument is a raw JSON payload string
         if len(sys.argv) > 1 and sys.argv[1].strip().startswith("{"):
@@ -397,26 +544,19 @@ def main():
 
         try:
             payload = json.loads(payload_raw)
-            repo_name = payload.get("repository", {}).get("name", "")
-            ref = payload.get("ref", "refs/heads/main")
-            branch = ref.replace("refs/heads/", "")
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON payload: {e}")
             sys.exit(1)
 
-    if not repo_name:
-        logger.error("No repository name found in payload.")
-        sys.exit(1)
+        admitted, target_dir, deployment_config, branch, reason = admit_deployment(payload, event_type)
+        if not admitted:
+            logger.warning(f"🚫 Webhook admission rejected: {reason}")
+            # Branch mismatch on valid push is benign skip; other violations fail closed
+            sys.exit(0 if "Branch mismatch" in reason else 1)
 
-    logger.info(f"Incoming webhook event: repository='{repo_name}', branch='{branch}'")
-    target_dir, deployment_config = resolve_target(repo_name)
-
-    if not target_dir or not target_dir.is_dir():
-        logger.warning(f"No valid deployment target directory found on host for '{repo_name}'. Ignoring.")
-        sys.exit(0)
-
-    success = execute_deployment(target_dir, deployment_config, branch)
-    sys.exit(0 if success else 1)
+        logger.info(f"✅ Webhook admission passed: {reason}")
+        success = execute_deployment(target_dir, deployment_config, branch)
+        sys.exit(0 if success else 1)
 
 
 if __name__ == "__main__":

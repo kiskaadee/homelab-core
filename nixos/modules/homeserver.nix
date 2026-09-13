@@ -109,6 +109,7 @@ in
           pass-arguments-to-command = [
             { source = "entire-payload"; }
             { source = "header"; name = "X-Gitea-Signature"; }
+            { source = "header"; name = "X-Gitea-Event"; }
           ];
           command-working-directory = "/home/kiskaadee/Core";
           response-message = "Deployment payload dispatched successfully.";
