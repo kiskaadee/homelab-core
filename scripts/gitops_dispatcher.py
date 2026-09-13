@@ -178,12 +178,9 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
                         ["docker", "compose", "-f", str(compose_file), "restart"],
                         check=True
                     )
-            elif isinstance(action, dict) and "custom" in action:
-                cmd = action["custom"]
-                logger.info(f"  ↳ [custom] Executing: {cmd}")
-                subprocess.run(cmd, shell=True, cwd=str(target_dir), check=True)
             else:
-                logger.warning(f"  ↳ Unknown action '{action}'; skipping.")
+                logger.error(f"❌ Unsupported or rejected deployment action '{action}'. Aborting deployment.")
+                return False
 
         logger.info(f"✨ Deployment of '{target_dir.name}' completed successfully.")
         return True

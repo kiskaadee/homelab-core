@@ -29,3 +29,10 @@ config/homepage/logs/
 Thumbs.db
 .vscode/
 .idea/
+
+# Python & Testing Caches
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
