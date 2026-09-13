@@ -7,6 +7,8 @@ in ~/Sites (via app.yaml) or data vaults (like ~/Brain), and executes the declar
 deployment actions with zero Core restarts.
 """
 
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -18,6 +20,7 @@ from pathlib import Path
 SITES_DIR = Path(os.environ.get("SITES_DIR", os.path.expanduser("~/Sites")))
 BRAIN_DIR = Path(os.environ.get("BRAIN_DIR", os.path.expanduser("~/Brain")))
 CONFIG_DIR = Path(os.environ.get("HOMELAB_CONFIG_DIR", os.path.expanduser("~/.config/homelab")))
+DEFAULT_SECRET_PATH = Path(os.environ.get("GITOPS_SECRET_FILE", "/run/secrets/gitops/webhook_secret"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,6 +28,55 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger("gitops_dispatcher")
+
+
+def load_webhook_secret(secret_file: Path | None = None) -> bytes:
+    """
+    Load webhook shared secret from projected secret file or environment.
+    Never hardcoded in code or repository manifests.
+    """
+    path = secret_file or Path(os.environ.get("GITOPS_SECRET_FILE", DEFAULT_SECRET_PATH))
+    if path.is_file():
+        try:
+            return path.read_bytes().strip()
+        except OSError as e:
+            logger.error(f"Failed to read webhook secret from {path}: {e}")
+            return b""
+
+    env_secret = os.environ.get("GITOPS_WEBHOOK_SECRET")
+    if env_secret:
+        return env_secret.strip().encode("utf-8")
+
+    return b""
+
+
+def verify_signature(raw_body: bytes, signature: str | None, secret: bytes) -> bool:
+    """
+    Verify incoming webhook HMAC-SHA256 signature using constant-time comparison.
+    Fail-closed: missing signature, malformed signature, empty secret, or mismatch returns False.
+    """
+    if not secret:
+        logger.error("Authentication failed: Webhook shared secret is empty or missing.")
+        return False
+
+    if not signature or not isinstance(signature, str):
+        logger.error("Authentication failed: Missing signature header.")
+        return False
+
+    cleaned_signature = signature.strip()
+    cleaned_signature = cleaned_signature.removeprefix("sha256=")
+
+    # SHA256 hex digest is exactly 64 hexadecimal characters
+    if len(cleaned_signature) != 64 or not all(c in "0123456789abcdefABCDEF" for c in cleaned_signature):
+        logger.error("Authentication failed: Malformed signature format.")
+        return False
+
+    expected_mac = hmac.new(secret, raw_body, hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(expected_mac.lower(), cleaned_signature.lower()):
+        logger.error("Authentication failed: Signature mismatch.")
+        return False
+
+    return True
 
 
 def parse_yaml_simple(text: str) -> dict:
@@ -303,6 +355,18 @@ def main():
     payload_raw = ""
     repo_name = ""
     branch = "main"
+    signature = None
+
+    if "--signature" in sys.argv:
+        sig_idx = sys.argv.index("--signature")
+        if sig_idx + 1 < len(sys.argv):
+            signature = sys.argv[sig_idx + 1]
+    elif len(sys.argv) > 2 and not sys.argv[2].startswith("-"):
+        signature = sys.argv[2]
+    elif os.environ.get("HTTP_X_GITEA_SIGNATURE"):
+        signature = os.environ.get("HTTP_X_GITEA_SIGNATURE")
+    elif os.environ.get("X_GITEA_SIGNATURE"):
+        signature = os.environ.get("X_GITEA_SIGNATURE")
 
     # Support CLI arguments for manual trigger: --repo <name> [--branch <branch>]
     if "--repo" in sys.argv:
@@ -323,6 +387,12 @@ def main():
 
         if not payload_raw:
             logger.error("No webhook payload provided (checked sys.argv and stdin).")
+            sys.exit(1)
+
+        raw_body = payload_raw.encode("utf-8")
+        secret = load_webhook_secret()
+        if not verify_signature(raw_body, signature, secret):
+            logger.error("❌ Webhook authentication failed. Rejecting request.")
             sys.exit(1)
 
         try:

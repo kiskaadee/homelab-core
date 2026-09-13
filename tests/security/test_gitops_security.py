@@ -141,3 +141,85 @@ def test_resolve_repository_resolves_vault(tmp_path: Path, monkeypatch):
     assert gitops_dispatcher.resolve_repository("Brain") == canonical
     assert gitops_dispatcher.resolve_repository("brain") == canonical
 
+
+def test_webhook_verification_valid_signature():
+    """Ensure valid HMAC-SHA256 signature passes verification."""
+    import hashlib
+    import hmac
+
+    secret = b"supersecrettoken123"
+    body = b'{"repository": {"name": "docs"}, "ref": "refs/heads/main"}'
+    expected_hex = hmac.new(secret, body, hashlib.sha256).hexdigest()
+
+    assert gitops_dispatcher.verify_signature(body, expected_hex, secret) is True
+    # Support sha256= prefix as well
+    assert gitops_dispatcher.verify_signature(body, f"sha256={expected_hex}", secret) is True
+
+
+def test_webhook_verification_invalid_signature():
+    """Ensure incorrect signature is rejected."""
+    secret = b"supersecrettoken123"
+    body = b'{"repository": {"name": "docs"}}'
+    bad_sig = "a" * 64
+
+    assert gitops_dispatcher.verify_signature(body, bad_sig, secret) is False
+
+
+def test_webhook_verification_missing_signature():
+    """Ensure missing signature header is rejected."""
+    secret = b"supersecrettoken123"
+    body = b'{"repository": {"name": "docs"}}'
+
+    assert gitops_dispatcher.verify_signature(body, None, secret) is False
+    assert gitops_dispatcher.verify_signature(body, "", secret) is False
+
+
+def test_webhook_verification_modified_body():
+    """Ensure signature mismatch from tampered body fails verification."""
+    import hashlib
+    import hmac
+
+    secret = b"supersecrettoken123"
+    body_original = b'{"repository": {"name": "docs"}}'
+    sig = hmac.new(secret, body_original, hashlib.sha256).hexdigest()
+
+    body_tampered = b'{"repository": {"name": "evil-app"}}'
+    assert gitops_dispatcher.verify_signature(body_tampered, sig, secret) is False
+
+
+def test_webhook_verification_modified_signature():
+    """Ensure single-character flip in signature fails verification."""
+    import hashlib
+    import hmac
+
+    secret = b"supersecrettoken123"
+    body = b'{"repository": {"name": "docs"}}'
+    sig = list(hmac.new(secret, body, hashlib.sha256).hexdigest())
+    sig[0] = "0" if sig[0] != "0" else "1"
+    flipped_sig = "".join(sig)
+
+    assert gitops_dispatcher.verify_signature(body, flipped_sig, secret) is False
+
+
+def test_webhook_verification_empty_secret_fails_closed():
+    """Ensure empty or missing shared secret fails closed."""
+    import hashlib
+    import hmac
+
+    secret = b""
+    body = b'{"repository": {"name": "docs"}}'
+    sig = hmac.new(b"somekey", body, hashlib.sha256).hexdigest()
+
+    assert gitops_dispatcher.verify_signature(body, sig, secret) is False
+
+
+def test_webhook_verification_malformed_signature():
+    """Ensure non-hex or invalid length signatures fail closed."""
+    secret = b"supersecrettoken123"
+    body = b'{"repository": {"name": "docs"}}'
+
+    assert gitops_dispatcher.verify_signature(body, "not-a-valid-hex-digest", secret) is False
+    assert gitops_dispatcher.verify_signature(body, "deadbeef", secret) is False
+    assert gitops_dispatcher.verify_signature(body, "z" * 64, secret) is False
+
+

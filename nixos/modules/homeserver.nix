@@ -46,6 +46,7 @@ in
     "authelia/users/kiskaadee/password_hash"
     "authelia/users/misa/password_hash"
     "authelia/users/valenvg/password_hash"
+    "gitops/webhook_secret"
   ] (name: { owner = "kiskaadee"; });
 
   # Generate the unified environment file at runtime in /run/secrets/homeserver.env
@@ -93,6 +94,10 @@ in
 
     path = with pkgs; [ git docker docker-compose python3 coreutils bash openssh ];
 
+    environment = {
+      GITOPS_SECRET_FILE = config.sops.secrets."gitops/webhook_secret".path;
+    };
+
     serviceConfig = {
       Type = "simple";
       User = "kiskaadee";
@@ -103,6 +108,7 @@ in
           execute-command = "/home/kiskaadee/Core/scripts/gitops_dispatcher.py";
           pass-arguments-to-command = [
             { source = "entire-payload"; }
+            { source = "header"; name = "X-Gitea-Signature"; }
           ];
           command-working-directory = "/home/kiskaadee/Core";
           response-message = "Deployment payload dispatched successfully.";
