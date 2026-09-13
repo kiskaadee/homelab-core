@@ -10,6 +10,7 @@ deployment actions with zero Core restarts.
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -73,63 +74,169 @@ def parse_yaml_simple(text: str) -> dict:
     return data
 
 
+REPO_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
+
+
+def get_trusted_repository_mapping() -> dict[str, Path]:
+    """
+    Build authoritative mapping of logical repository identities to local paths.
+    Webhook payloads can only select repositories defined in this mapping.
+    """
+    mapping: dict[str, Path] = {}
+
+    # 1. Authoritative Data Vaults
+    if BRAIN_DIR.is_dir():
+        brain_canonical = BRAIN_DIR.resolve()
+        for alias in ["second-brain", "Brain", "brain"]:
+            mapping[alias] = brain_canonical
+
+    # 2. Workload Plane Applications in SITES_DIR
+    if SITES_DIR.is_dir():
+        sites_canonical = SITES_DIR.resolve()
+        for entry in SITES_DIR.iterdir():
+            if not entry.is_dir():
+                continue
+
+            # Defense-in-depth: resolve symlinks and ensure target is strictly inside SITES_DIR
+            resolved_entry = entry.resolve()
+            if not resolved_entry.is_relative_to(sites_canonical):
+                logger.warning(f"Rejecting repository symlink escape: {entry} -> {resolved_entry}")
+                continue
+
+            manifest_file = resolved_entry / "app.yaml"
+            if not manifest_file.is_file():
+                continue
+
+            # Register entry directory name
+            dir_name = entry.name
+            mapping[dir_name] = resolved_entry
+
+            # Parse app.yaml for canonical name and aliases
+            manifest = {}
+            try:
+                manifest = parse_yaml_simple(manifest_file.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+                logger.warning(f"Failed to parse {manifest_file}: {e}")
+
+            canonical_name = manifest.get("name")
+            if canonical_name and isinstance(canonical_name, str):
+                canonical_name = canonical_name.strip()
+                mapping[canonical_name] = resolved_entry
+                if not canonical_name.startswith("homelab-"):
+                    mapping[f"homelab-{canonical_name}"] = resolved_entry
+                else:
+                    mapping[canonical_name.replace("homelab-", "", 1)] = resolved_entry
+
+            aliases = manifest.get("aliases", [])
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            if isinstance(aliases, list):
+                for alias in aliases:
+                    if isinstance(alias, str) and alias.strip():
+                        mapping[alias.strip()] = resolved_entry
+
+    # 3. Optional local override registry with strict containment
+    registry_file = CONFIG_DIR / "deployments.yaml"
+    if registry_file.is_file():
+        try:
+            registry = parse_yaml_simple(registry_file.read_text(encoding="utf-8"))
+            for reg_name, entry in registry.items():
+                if not isinstance(entry, dict):
+                    continue
+                raw_path = entry.get("path")
+                if not raw_path:
+                    continue
+                p = Path(raw_path).resolve()
+                # Must be strictly relative to SITES_DIR or BRAIN_DIR
+                if (SITES_DIR.is_dir() and p.is_relative_to(SITES_DIR.resolve())) or \
+                   (BRAIN_DIR.is_dir() and p.is_relative_to(BRAIN_DIR.resolve())):
+                    mapping[reg_name] = p
+                else:
+                    logger.warning(f"Rejecting out-of-bounds path in deployments.yaml for '{reg_name}': {p}")
+        except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+            logger.warning(f"Failed to parse custom registry {registry_file}: {e}")
+
+    return mapping
+
+
+def resolve_repository(repo_name: str) -> Path | None:
+    """
+    Resolve a logical repository identity to a trusted local directory.
+    Rejects directory traversal, unknown repositories, and path escapes.
+    """
+    if not repo_name or not isinstance(repo_name, str):
+        return None
+
+    cleaned_name = repo_name.strip()
+    if not REPO_NAME_RE.match(cleaned_name):
+        logger.warning(f"Invalid repository name format rejected: '{repo_name}'")
+        return None
+
+    if ".." in cleaned_name or "/" in cleaned_name or "\\" in cleaned_name:
+        logger.warning(f"Path traversal characters detected in repository name: '{repo_name}'")
+        return None
+
+    trusted_mapping = get_trusted_repository_mapping()
+    target = trusted_mapping.get(cleaned_name)
+
+    if not target:
+        logger.warning(f"Repository '{cleaned_name}' is not in trusted repository registry.")
+        return None
+
+    try:
+        canonical_target = target.resolve()
+    except (OSError, RuntimeError) as e:
+        logger.warning(f"Failed to resolve target path for '{cleaned_name}': {e}")
+        return None
+
+    if not canonical_target.is_dir():
+        logger.warning(f"Trusted repository target '{canonical_target}' does not exist or is not a directory.")
+        return None
+
+    # Defense-in-depth: check allowed root containment
+    allowed = False
+    if SITES_DIR.is_dir() and canonical_target.is_relative_to(SITES_DIR.resolve()) or BRAIN_DIR.is_dir() and canonical_target.is_relative_to(BRAIN_DIR.resolve()):
+        allowed = True
+
+    if not allowed:
+        logger.warning(f"Resolved path '{canonical_target}' escapes allowed roots for repository '{cleaned_name}'.")
+        return None
+
+    return canonical_target
+
+
 def resolve_target(repo_name: str) -> tuple[Path | None, dict]:
     """
     Dynamically resolve target directory and deployment configuration.
-    1. Check ~/Sites/<repo_name> or ~/Sites/homelab-<repo_name>
-    2. Check Data Vaults (second-brain -> ~/Brain)
-    3. Check ~/.config/homelab/deployments.yaml fallback
+    Uses resolve_repository() as the single authoritative resolver.
     """
-    normalized_name = repo_name.strip()
-    short_name = normalized_name.replace("homelab-", "")
+    target_dir = resolve_repository(repo_name)
+    if not target_dir:
+        return None, {}
 
-    # 1. Check Data Vaults
-    if normalized_name in ["second-brain", "Brain", "brain"]:
-        return BRAIN_DIR, {
+    # Data vault default deployment config
+    if BRAIN_DIR.is_dir() and target_dir == BRAIN_DIR.resolve():
+        return target_dir, {
             "branch": "main",
             "actions": ["git_pull"]
         }
 
-    # 2. Check ~/Sites directories
-    candidates = [
-        SITES_DIR / normalized_name,
-        SITES_DIR / f"homelab-{short_name}",
-        SITES_DIR / short_name,
-    ]
-
-    for candidate in candidates:
-        if candidate.is_dir():
-            manifest_file = candidate / "app.yaml"
-            manifest = {}
-            if manifest_file.is_file():
-                try:
-                    manifest = parse_yaml_simple(manifest_file.read_text())
-                except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
-                    logger.warning(f"Failed to parse {manifest_file}: {e}")
-
-            deployment_config = manifest.get("deployment")
-            if not isinstance(deployment_config, dict):
-                # Default application deployment strategy
-                deployment_config = {
-                    "branch": "main",
-                    "actions": ["git_pull", "compose_up"]
-                }
-            return candidate, deployment_config
-
-    # 3. Check custom override registry in ~/.config/homelab/deployments.yaml
-    registry_file = CONFIG_DIR / "deployments.yaml"
-    if registry_file.is_file():
+    manifest_file = target_dir / "app.yaml"
+    manifest = {}
+    if manifest_file.is_file():
         try:
-            registry = parse_yaml_simple(registry_file.read_text())
-            if normalized_name in registry:
-                entry = registry[normalized_name]
-                target_path = Path(entry.get("path", ""))
-                if target_path.is_dir():
-                    return target_path, entry.get("deployment", {"branch": "main", "actions": ["git_pull"]})
+            manifest = parse_yaml_simple(manifest_file.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
-            logger.warning(f"Failed to parse custom registry {registry_file}: {e}")
+            logger.warning(f"Failed to parse {manifest_file}: {e}")
 
-    return None, {}
+    deployment_config = manifest.get("deployment")
+    if not isinstance(deployment_config, dict):
+        deployment_config = {
+            "branch": "main",
+            "actions": ["git_pull", "compose_up"]
+        }
+
+    return target_dir, deployment_config
 
 
 def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -> bool:
