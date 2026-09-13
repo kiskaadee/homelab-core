@@ -100,6 +100,66 @@ appctl sync
 
 ---
 
+## ⚡ Hardened GitOps Continuous Deployment
+
+Automated deployments are driven by the hardened webhook engine [`scripts/gitops_dispatcher.py`](scripts/gitops_dispatcher.py) managed via the declarative `homelab-gitops.service` systemd unit on port 9000.
+
+```
+Webhook Request (:9000)
+       │
+       ▼
+[ 1. Cryptographic HMAC Verification ] ──► (X-Gitea-Signature checked via constant-time compare against SOPS secret)
+       │
+       ▼
+[ 2. Event & Ref Admission ]           ──► (Only 'push' to 'refs/heads/*' admitted; PRs/tags rejected)
+       │
+       ▼
+[ 3. Canonical Repository Resolution ] ──► (Logical names resolved against trusted ~/Sites mapping; traversal blocked)
+       │
+       ▼
+[ 4. Manifest & Branch Validation ]    ──► (app.yaml validated; pushed branch must match declared policy)
+       │
+       ▼
+[ 5. Asynchronous Queue & Worker ]     ──► (Atomic queueing + immediate HTTP 200 return; per-repo flock worker)
+       │
+       ▼
+[ 6. Closed Execution Engine ]         ──► (Strictly allowlisted actions without shell=True)
+```
+
+### GitOps Security Properties:
+* **Zero Arbitrary Shell Execution**: The `custom:` command path and `shell=True` invocations are abolished. Only closed, allowlisted actions (`git_pull`, `compose_up`, `compose_build`, `compose_restart`) are executable.
+* **Cryptographic Admission**: Every incoming webhook must provide an `X-Gitea-Signature` matching the SOPS-managed secret projected to `/run/secrets/gitops/webhook_secret`. Missing, malformed, or mismatching signatures fail closed.
+* **Trusted Identity Resolution**: Webhooks identify target applications by logical identity (`docs`, `homelab-docs`), never by filesystem path. Paths are canonicalized with strict path traversal and symlink escape defenses.
+* **Serialized Asynchronous Execution**: Webhook admissions write atomic pending requests and return HTTP 200 immediately. Detached per-repo workers serialize deployments via non-blocking `flock` and automatically supersede intermediate commits (A deploys, B arrives, C replaces B -> A finishes, then C deploys).
+
+---
+
+## 🧪 Automated Invariant Tests & Continuous Integration
+
+Architectural boundaries and security invariants are enforced continuously by a machine-executable test suite in [`tests/`](tests/):
+
+### Test Structure:
+* **`tests/security/test_gitops_security.py`**: Webhook HMAC signatures, traversal prevention, admission gates, and race condition superseding.
+* **`tests/security/test_security_invariants.py`**: Docker socket-proxy policies (`POST=0`, `DELETE=0`), container socket isolation, and absence of `privileged: true`.
+* **`tests/structural/test_repository_structure.py`**: Repository tree integrity, absence of deprecated structures, and public domain license preservation.
+
+### Running Tests:
+```bash
+# Run the complete test and invariant suite locally
+./scripts/test
+
+# Run pure Nix sandbox verification (runs ruff and pytest in an isolated Nix derivation)
+nix flake check
+
+# Enter a development shell with pytest, pyyaml, and ruff preconfigured
+nix develop
+```
+
+### Continuous Integration:
+Every pull request and push to `main` triggers [`.gitea/workflows/ci.yaml`](.gitea/workflows/ci.yaml), executing `nix flake check` to prevent architectural regressions.
+
+---
+
 ## 📦 Adding a New Application Stack
 
 Adding a new application to the homelab is completely decentralized:
@@ -210,4 +270,4 @@ nixos-install --flake ~/Core#server
 ---
 
 ## 📄 License
-This repository is released into the public domain under the [Unlicense](LICENSE).
+This repository is released into the public domain under [The Unlicense](UNLICENSE).
