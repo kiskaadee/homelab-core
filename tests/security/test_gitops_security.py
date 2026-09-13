@@ -2,6 +2,7 @@
 Security invariant tests for homelab GitOps execution and admission.
 """
 
+import json
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -358,6 +359,86 @@ def test_admission_admits_valid_push(tmp_path: Path, monkeypatch):
     assert target_dir == app_dir.resolve()
     assert branch == "main"
     assert config["actions"] == ["git_pull", "compose_up"]
+
+
+def test_enqueue_supersedes_pending_revision(tmp_path: Path, monkeypatch):
+    """Ensure newer pending deployment overwrites older pending deployment."""
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(gitops_dispatcher, "STATE_DIR", state_dir)
+
+    target_dir = tmp_path / "app"
+    target_dir.mkdir()
+
+    # Enqueue revision A
+    gitops_dispatcher.enqueue_deployment(target_dir, {"branch": "main", "rev": "A"}, "main")
+    pending_file = gitops_dispatcher.get_pending_file("app")
+    assert json.loads(pending_file.read_text())["deployment_config"]["rev"] == "A"
+
+    # Enqueue revision B (supersedes A)
+    gitops_dispatcher.enqueue_deployment(target_dir, {"branch": "main", "rev": "B"}, "main")
+    assert json.loads(pending_file.read_text())["deployment_config"]["rev"] == "B"
+
+    # Enqueue revision C (supersedes B)
+    gitops_dispatcher.enqueue_deployment(target_dir, {"branch": "main", "rev": "C"}, "main")
+    assert json.loads(pending_file.read_text())["deployment_config"]["rev"] == "C"
+
+
+def test_serialized_worker_race_superseding(tmp_path: Path, monkeypatch):
+    """
+    Simulate race condition:
+    A starts
+    B arrives (enqueued)
+    C arrives (supersedes B)
+    A finishes
+    Verify: B is skipped, C is deployed.
+    """
+    import threading
+
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(gitops_dispatcher, "STATE_DIR", state_dir)
+
+    target_dir = tmp_path / "app"
+    target_dir.mkdir()
+
+    executed_revisions = []
+    a_started_event = threading.Event()
+    b_and_c_enqueued_event = threading.Event()
+
+    def mock_execute(target, config, branch):
+        rev = config.get("rev", "unknown")
+        executed_revisions.append(rev)
+        if rev == "A":
+            a_started_event.set()
+            # Wait until B and C are enqueued
+            b_and_c_enqueued_event.wait(timeout=2.0)
+        return True
+
+    monkeypatch.setattr(gitops_dispatcher, "execute_deployment", mock_execute)
+
+    # 1. Enqueue A
+    gitops_dispatcher.enqueue_deployment(target_dir, {"branch": "main", "rev": "A"}, "main")
+
+    # Start worker in thread (takes A)
+    worker_thread = threading.Thread(target=gitops_dispatcher.run_target_worker, args=("app",))
+    worker_thread.start()
+
+    # Wait for A to start executing
+    assert a_started_event.wait(timeout=2.0) is True
+
+    # 2. B arrives while A is running
+    gitops_dispatcher.enqueue_deployment(target_dir, {"branch": "main", "rev": "B"}, "main")
+
+    # 3. C arrives while A is running (supersedes B)
+    gitops_dispatcher.enqueue_deployment(target_dir, {"branch": "main", "rev": "C"}, "main")
+
+    # Let A complete
+    b_and_c_enqueued_event.set()
+
+    worker_thread.join(timeout=3.0)
+
+    # Verification: A was executed, B was superseded/skipped, C was executed!
+    assert executed_revisions == ["A", "C"], f"Expected ['A', 'C'] but got {executed_revisions}"
+
 
 
 

@@ -7,6 +7,9 @@ in ~/Sites (via app.yaml) or data vaults (like ~/Brain), and executes the declar
 deployment actions with zero Core restarts.
 """
 
+import contextlib
+import datetime
+import fcntl
 import hashlib
 import hmac
 import json
@@ -21,6 +24,7 @@ SITES_DIR = Path(os.environ.get("SITES_DIR", os.path.expanduser("~/Sites")))
 BRAIN_DIR = Path(os.environ.get("BRAIN_DIR", os.path.expanduser("~/Brain")))
 CONFIG_DIR = Path(os.environ.get("HOMELAB_CONFIG_DIR", os.path.expanduser("~/.config/homelab")))
 DEFAULT_SECRET_PATH = Path(os.environ.get("GITOPS_SECRET_FILE", "/run/secrets/gitops/webhook_secret"))
+STATE_DIR = Path(os.environ.get("GITOPS_STATE_DIR", Path.home() / ".local/state/homelab/gitops"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -479,12 +483,109 @@ def admit_deployment(
     return True, target_dir, deployment_config, pushed_branch, f"Admitted for deployment on branch '{pushed_branch}'."
 
 
+def get_target_lock(target_name: str) -> Path:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return STATE_DIR / f"{target_name}.lock"
+
+
+def get_pending_file(target_name: str) -> Path:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    return STATE_DIR / f"{target_name}.pending.json"
+
+
+def enqueue_deployment(target_dir: Path, deployment_config: dict, branch: str) -> Path:
+    """
+    Atomically enqueue a deployment request.
+    Supersedes any existing pending request for this target.
+    """
+    target_name = target_dir.name
+    pending_file = get_pending_file(target_name)
+    temp_file = STATE_DIR / f"{target_name}.pending.tmp.{os.getpid()}"
+
+    data = {
+        "target_dir": str(target_dir),
+        "deployment_config": deployment_config,
+        "branch": branch,
+        "queued_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+
+    temp_file.write_text(json.dumps(data), encoding="utf-8")
+    temp_file.replace(pending_file)
+    logger.info(f"📥 Enqueued deployment for '{target_name}' (branch: {branch}, superseding previous pending).")
+    return pending_file
+
+
+def run_target_worker(target_name: str) -> bool:
+    """
+    Serialized worker for a specific repository.
+    Acquires exclusive flock and processes pending deployments until queue is empty.
+    """
+    lock_file_path = get_target_lock(target_name)
+    pending_file_path = get_pending_file(target_name)
+
+    with open(lock_file_path, "w", encoding="utf-8") as lock_fd:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            logger.info(f"Deployment worker for '{target_name}' is already active. Pending update will be picked up.")
+            return True
+
+        overall_success = True
+        try:
+            while True:
+                if not pending_file_path.is_file():
+                    break
+
+                try:
+                    content = pending_file_path.read_text(encoding="utf-8")
+                    pending_file_path.unlink(missing_ok=True)
+                    item = json.loads(content)
+                except (OSError, json.JSONDecodeError) as e:
+                    logger.error(f"Failed to read pending deployment file: {e}")
+                    break
+
+                target_dir = Path(item["target_dir"])
+                deployment_config = item["deployment_config"]
+                branch = item["branch"]
+
+                success = execute_deployment(target_dir, deployment_config, branch)
+                if not success:
+                    overall_success = False
+
+            return overall_success
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+
+
+def spawn_worker_async(target_name: str):
+    """Spawn a detached worker process to execute deployments asynchronously."""
+    dispatcher_script = Path(__file__).resolve()
+    cmd = [sys.executable, str(dispatcher_script), "--worker", target_name]
+    subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True
+    )
+
+
 def main():
     payload_raw = ""
     repo_name = ""
     branch = "main"
     signature = None
     event_type = None
+
+    if "--worker" in sys.argv:
+        w_idx = sys.argv.index("--worker")
+        if w_idx + 1 < len(sys.argv):
+            worker_target = sys.argv[w_idx + 1]
+            success = run_target_worker(worker_target)
+            sys.exit(0 if success else 1)
+        else:
+            logger.error("--worker requires a repository/target name.")
+            sys.exit(1)
 
     if "--signature" in sys.argv:
         sig_idx = sys.argv.index("--signature")
@@ -555,8 +656,10 @@ def main():
             sys.exit(0 if "Branch mismatch" in reason else 1)
 
         logger.info(f"✅ Webhook admission passed: {reason}")
-        success = execute_deployment(target_dir, deployment_config, branch)
-        sys.exit(0 if success else 1)
+        enqueue_deployment(target_dir, deployment_config, branch)
+        spawn_worker_async(target_dir.name)
+        logger.info(f"🚀 Asynchronous deployment scheduled for '{target_dir.name}'. Returning HTTP 200.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":
