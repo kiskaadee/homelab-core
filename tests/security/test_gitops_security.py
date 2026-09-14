@@ -440,5 +440,131 @@ def test_serialized_worker_race_superseding(tmp_path: Path, monkeypatch):
     assert executed_revisions == ["A", "C"], f"Expected ['A', 'C'] but got {executed_revisions}"
 
 
+def test_post_pull_manifest_validation_rejects_unsupported_action(tmp_path: Path):
+    """
+    Ensure that if a pulled revision introduces an unsupported action in app.yaml,
+    the post-pull validation detects it and fails closed before any compose actions run.
+    """
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    manifest_file = app_dir / "app.yaml"
+    manifest_file.write_text("name: app\ndeployment:\n  branch: main\n  actions:\n    - git_pull\n    - compose_up\n")
+    (app_dir / "docker-compose.yml").write_text("version: '3'\nservices:\n  web:\n    image: nginx\n")
+
+    initial_config = {
+        "branch": "main",
+        "actions": ["git_pull", "compose_up"]
+    }
+
+    def mock_pull(cmd, check=True):
+        if "pull" in cmd:
+            # Simulate git pull bringing in an invalid action in app.yaml
+            manifest_file.write_text("name: app\ndeployment:\n  branch: main\n  actions:\n    - git_pull\n    - evil_action\n")
+        return MagicMock(returncode=0)
+
+    with patch("subprocess.run", side_effect=mock_pull) as mock_run:
+        success = gitops_dispatcher.execute_deployment(app_dir, initial_config, branch="main")
+
+        assert success is False, "Deployment must fail closed when pulled revision has invalid actions"
+        # Only git pull was called; compose_up was never reached!
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert len(calls) == 1
+        assert "pull" in calls[0]
+
+
+def test_post_pull_manifest_validation_rejects_branch_policy_mismatch(tmp_path: Path):
+    """
+    Ensure that if a pulled revision modifies app.yaml to target a different branch,
+    post-pull branch validation catches the mismatch and aborts deployment.
+    """
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    manifest_file = app_dir / "app.yaml"
+    manifest_file.write_text("name: app\ndeployment:\n  branch: main\n  actions:\n    - git_pull\n    - compose_up\n")
+    (app_dir / "docker-compose.yml").write_text("version: '3'\nservices:\n  web:\n    image: nginx\n")
+
+    initial_config = {
+        "branch": "main",
+        "actions": ["git_pull", "compose_up"]
+    }
+
+    def mock_pull(cmd, check=True):
+        if "pull" in cmd:
+            # Simulate git pull bringing in an app.yaml that targets 'staging', not 'main'
+            manifest_file.write_text("name: app\ndeployment:\n  branch: staging\n  actions:\n    - git_pull\n    - compose_up\n")
+        return MagicMock(returncode=0)
+
+    with patch("subprocess.run", side_effect=mock_pull) as mock_run:
+        success = gitops_dispatcher.execute_deployment(app_dir, initial_config, branch="main")
+
+        assert success is False, "Deployment must fail closed on post-pull branch mismatch"
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        assert len(calls) == 1
+        assert "pull" in calls[0]
+
+
+def test_post_pull_manifest_adopts_updated_actions(tmp_path: Path):
+    """
+    Ensure that when a pulled revision declares different valid actions (e.g. compose_build),
+    post-pull manifest validation adopts and executes the new revision's actions.
+    """
+    app_dir = tmp_path / "app"
+    app_dir.mkdir()
+    manifest_file = app_dir / "app.yaml"
+    manifest_file.write_text("name: app\ndeployment:\n  branch: main\n  actions:\n    - git_pull\n    - compose_up\n")
+    (app_dir / "docker-compose.yml").write_text("version: '3'\nservices:\n  web:\n    image: nginx\n")
+
+    initial_config = {
+        "branch": "main",
+        "actions": ["git_pull", "compose_up"]
+    }
+
+    def mock_pull(cmd, check=True):
+        if "pull" in cmd:
+            # Revision updates action to compose_build
+            manifest_file.write_text("name: app\ndeployment:\n  branch: main\n  actions:\n    - git_pull\n    - compose_build\n")
+        return MagicMock(returncode=0)
+
+    with patch("subprocess.run", side_effect=mock_pull) as mock_run:
+        success = gitops_dispatcher.execute_deployment(app_dir, initial_config, branch="main")
+
+        assert success is True
+        calls = [c[0][0] for c in mock_run.call_args_list]
+        # Should call pull, then build, then up
+        assert any("pull" in c for c in calls)
+        assert any("build" in c for c in calls)
+
+
+def test_worker_records_status_file(tmp_path: Path, monkeypatch):
+    """Ensure worker writes intentional execution status file on completion."""
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr(gitops_dispatcher, "STATE_DIR", state_dir)
+
+    target_dir = tmp_path / "app"
+    target_dir.mkdir()
+
+    monkeypatch.setattr(gitops_dispatcher, "execute_deployment", lambda t, c, b: True)
+
+    gitops_dispatcher.enqueue_deployment(
+        target_dir,
+        {"branch": "main"},
+        "main",
+        commit_sha="abcdef123456"
+    )
+
+    success = gitops_dispatcher.run_target_worker("app")
+    assert success is True
+
+    status_file = state_dir / "app.status.json"
+    assert status_file.is_file()
+    status = json.loads(status_file.read_text())
+    assert status["target"] == "app"
+    assert status["branch"] == "main"
+    assert status["commit_sha"] == "abcdef123456"
+    assert status["success"] is True
+    assert "timestamp" in status
+
+
+
 
 

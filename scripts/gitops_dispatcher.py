@@ -57,6 +57,8 @@ def load_webhook_secret(secret_file: Path | None = None) -> bytes:
 def verify_signature(raw_body: bytes, signature: str | None, secret: bytes) -> bool:
     """
     Verify incoming webhook HMAC-SHA256 signature using constant-time comparison.
+    Primary Gitea path: X-Gitea-Signature provides the bare 64-character hex digest of the raw body.
+    Compatibility path: X-Hub-Signature-256 provides 'sha256=<hex>'.
     Fail-closed: missing signature, malformed signature, empty secret, or mismatch returns False.
     """
     if not secret:
@@ -306,8 +308,47 @@ def resolve_target(repo_name: str) -> tuple[Path | None, dict]:
     return target_dir, deployment_config
 
 
+ALLOWED_ACTIONS = {"git_pull", "compose_up", "compose_build", "compose_restart"}
+ALLOWED_STRATEGIES = {"compose"}
+
+
+def validate_manifest_deployment(manifest: dict) -> tuple[bool, str]:
+    """
+    Validate deployment policy inside app.yaml.
+    Rejects unsupported deployment strategies or unknown actions.
+    """
+    deployment = manifest.get("deployment")
+    if deployment is None:
+        return True, ""
+
+    if not isinstance(deployment, dict):
+        return False, "Field 'deployment' must be a mapping/dictionary."
+
+    # Validate strategy if specified
+    strategy = deployment.get("strategy")
+    if strategy is not None and strategy not in ALLOWED_STRATEGIES:
+        return False, f"Unsupported deployment strategy '{strategy}'. Allowed strategies: {sorted(ALLOWED_STRATEGIES)}"
+
+    # Validate actions if specified
+    actions = deployment.get("actions")
+    if actions is not None:
+        if not isinstance(actions, list):
+            return False, "Field 'deployment.actions' must be a list of strings."
+        for action in actions:
+            if not isinstance(action, str) or action not in ALLOWED_ACTIONS:
+                return False, f"Unsupported deployment action '{action}'. Allowed actions: {sorted(ALLOWED_ACTIONS)}"
+
+    return True, ""
+
+
 def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -> bool:
-    """Execute declared deployment actions sequentially."""
+    """
+    Execute declared deployment actions sequentially.
+    Enforces revision-consistent manifest validation:
+    After pulling the target revision, app.yaml is re-read and re-validated
+    from the freshly updated tree, ensuring deployment policy is derived
+    from the exact revision being deployed.
+    """
     expected_branch = deployment_config.get("branch", "main")
     if branch and branch != expected_branch:
         logger.info(f"Skipping deployment: pushed branch '{branch}' != target branch '{expected_branch}'")
@@ -317,13 +358,46 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
     actions = deployment_config.get("actions", ["git_pull"])
 
     try:
-        for action in actions:
+        idx = 0
+        while idx < len(actions):
+            action = actions[idx]
             if action == "git_pull":
                 logger.info(f"  ↳ [git_pull] Pulling latest '{expected_branch}'...")
                 subprocess.run(
                     ["git", "-C", str(target_dir), "pull", "--ff-only", "origin", expected_branch],
                     check=True
                 )
+                # Revision-consistent manifest validation:
+                # The working tree has now advanced to the deployed revision.
+                # Re-read and re-validate app.yaml from the exact deployed revision.
+                if not (BRAIN_DIR.is_dir() and target_dir == BRAIN_DIR.resolve()):
+                    manifest_file = target_dir / "app.yaml"
+                    if manifest_file.is_file():
+                        try:
+                            fresh_manifest = parse_yaml_simple(manifest_file.read_text(encoding="utf-8"))
+                        except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+                            logger.error(f"❌ Post-pull manifest parse failure in {manifest_file}: {e}")
+                            return False
+
+                        valid, err_msg = validate_manifest_deployment(fresh_manifest)
+                        if not valid:
+                            logger.error(f"❌ Post-pull manifest validation failed for '{target_dir.name}': {err_msg}")
+                            return False
+
+                        fresh_config = fresh_manifest.get("deployment")
+                        if isinstance(fresh_config, dict):
+                            fresh_branch = fresh_config.get("branch", "main")
+                            if branch and branch != fresh_branch:
+                                logger.error(
+                                    f"❌ Post-pull branch policy violation: revision declared branch '{fresh_branch}', "
+                                    f"but pushed branch was '{branch}'. Aborting deployment."
+                                )
+                                return False
+                            # Adopt the freshly validated actions from the deployed revision
+                            fresh_actions = fresh_config.get("actions", actions)
+                            actions = [a for a in fresh_actions if a != "git_pull"]
+                            idx = 0
+                            continue
             elif action == "compose_up":
                 compose_file = target_dir / "docker-compose.yml"
                 if compose_file.is_file():
@@ -356,6 +430,8 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
                 logger.error(f"❌ Unsupported or rejected deployment action '{action}'. Aborting deployment.")
                 return False
 
+            idx += 1
+
         logger.info(f"✨ Deployment of '{target_dir.name}' completed successfully.")
         return True
     except subprocess.CalledProcessError as e:
@@ -364,39 +440,6 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
     except (subprocess.SubprocessError, OSError, KeyError, TypeError, ValueError, RuntimeError) as e:
         logger.error(f"❌ Unexpected deployment error: {e}")
         return False
-
-
-ALLOWED_ACTIONS = {"git_pull", "compose_up", "compose_build", "compose_restart"}
-ALLOWED_STRATEGIES = {"compose"}
-
-
-def validate_manifest_deployment(manifest: dict) -> tuple[bool, str]:
-    """
-    Validate deployment policy inside app.yaml.
-    Rejects unsupported deployment strategies or unknown actions.
-    """
-    deployment = manifest.get("deployment")
-    if deployment is None:
-        return True, ""
-
-    if not isinstance(deployment, dict):
-        return False, "Field 'deployment' must be a mapping/dictionary."
-
-    # Validate strategy if specified
-    strategy = deployment.get("strategy")
-    if strategy is not None and strategy not in ALLOWED_STRATEGIES:
-        return False, f"Unsupported deployment strategy '{strategy}'. Allowed strategies: {sorted(ALLOWED_STRATEGIES)}"
-
-    # Validate actions if specified
-    actions = deployment.get("actions")
-    if actions is not None:
-        if not isinstance(actions, list):
-            return False, "Field 'deployment.actions' must be a list of strings."
-        for action in actions:
-            if not isinstance(action, str) or action not in ALLOWED_ACTIONS:
-                return False, f"Unsupported deployment action '{action}'. Allowed actions: {sorted(ALLOWED_ACTIONS)}"
-
-    return True, ""
 
 
 def admit_deployment(
@@ -493,7 +536,12 @@ def get_pending_file(target_name: str) -> Path:
     return STATE_DIR / f"{target_name}.pending.json"
 
 
-def enqueue_deployment(target_dir: Path, deployment_config: dict, branch: str) -> Path:
+def enqueue_deployment(
+    target_dir: Path,
+    deployment_config: dict,
+    branch: str,
+    commit_sha: str = ""
+) -> Path:
     """
     Atomically enqueue a deployment request.
     Supersedes any existing pending request for this target.
@@ -506,6 +554,7 @@ def enqueue_deployment(target_dir: Path, deployment_config: dict, branch: str) -
         "target_dir": str(target_dir),
         "deployment_config": deployment_config,
         "branch": branch,
+        "commit_sha": commit_sha,
         "queued_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
 
@@ -519,6 +568,7 @@ def run_target_worker(target_name: str) -> bool:
     """
     Serialized worker for a specific repository.
     Acquires exclusive flock and processes pending deployments until queue is empty.
+    Records intentional execution status in the state directory.
     """
     lock_file_path = get_target_lock(target_name)
     pending_file_path = get_pending_file(target_name)
@@ -547,8 +597,24 @@ def run_target_worker(target_name: str) -> bool:
                 target_dir = Path(item["target_dir"])
                 deployment_config = item["deployment_config"]
                 branch = item["branch"]
+                commit_sha = item.get("commit_sha", "")
 
                 success = execute_deployment(target_dir, deployment_config, branch)
+
+                # Record intentional execution status
+                status_file = STATE_DIR / f"{target_name}.status.json"
+                try:
+                    status_data = {
+                        "target": target_name,
+                        "branch": branch,
+                        "commit_sha": commit_sha,
+                        "success": success,
+                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    }
+                    status_file.write_text(json.dumps(status_data, indent=2), encoding="utf-8")
+                except OSError as e:
+                    logger.warning(f"Failed to write deployment status file {status_file}: {e}")
+
                 if not success:
                     overall_success = False
 
@@ -656,7 +722,11 @@ def main():
             sys.exit(0 if "Branch mismatch" in reason else 1)
 
         logger.info(f"✅ Webhook admission passed: {reason}")
-        enqueue_deployment(target_dir, deployment_config, branch)
+        commit_sha = payload.get("after", "")
+        if not commit_sha and isinstance(payload.get("head_commit"), dict):
+            commit_sha = payload.get("head_commit", {}).get("id", "")
+
+        enqueue_deployment(target_dir, deployment_config, branch, commit_sha=commit_sha)
         spawn_worker_async(target_dir.name)
         logger.info(f"🚀 Asynchronous deployment scheduled for '{target_dir.name}'. Returning HTTP 200.")
         sys.exit(0)
