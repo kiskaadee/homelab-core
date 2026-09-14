@@ -117,20 +117,25 @@ Webhook Request (:9000)
 [ 3. Canonical Repository Resolution ] ──► (Logical names resolved against trusted ~/Sites mapping; traversal blocked)
        │
        ▼
-[ 4. Manifest & Branch Validation ]    ──► (app.yaml validated; pushed branch must match declared policy)
+[ 4. Manifest & Branch Admission ]     ──► (Initial policy check; pushed branch must match declared target)
        │
        ▼
-[ 5. Asynchronous Queue & Worker ]     ──► (Atomic queueing + immediate HTTP 200 return; per-repo flock worker)
+[ 5. Asynchronous Queue & Dispatch ]   ──► (Atomic queueing + immediate HTTP 200 return; per-repo flock worker)
        │
        ▼
-[ 6. Closed Execution Engine ]         ──► (Strictly allowlisted actions without shell=True)
+[ 6. Revision-Consistent Validation ]  ──► (Working tree updated to target revision; app.yaml re-validated on-tree)
+       │
+       ▼
+[ 7. Closed Execution & Status ]       ──► (Strictly allowlisted actions; persistent .status.json state tracking)
 ```
 
 ### GitOps Security Properties:
 * **Zero Arbitrary Shell Execution**: The `custom:` command path and `shell=True` invocations are abolished. Only closed, allowlisted actions (`git_pull`, `compose_up`, `compose_build`, `compose_restart`) are executable.
 * **Cryptographic Admission**: Every incoming webhook must provide an `X-Gitea-Signature` matching the SOPS-managed secret projected to `/run/secrets/gitops/webhook_secret`. Missing, malformed, or mismatching signatures fail closed.
 * **Trusted Identity Resolution**: Webhooks identify target applications by logical identity (`docs`, `homelab-docs`), never by filesystem path. Paths are canonicalized with strict path traversal and symlink escape defenses.
+* **Revision-Consistent Manifest Validation**: Manifests and branch authorization policies are re-validated immediately post-pull directly against the target revision working tree, preventing pre-pull configuration hijacking and ensuring deployment policy is strictly derived from the revision being deployed.
 * **Serialized Asynchronous Execution**: Webhook admissions write atomic pending requests and return HTTP 200 immediately. Detached per-repo workers serialize deployments via non-blocking `flock` and automatically supersede intermediate commits (A deploys, B arrives, C replaces B -> A finishes, then C deploys).
+* **Intentional Worker State Observation**: Workers record execution status, commit SHAs, timestamps, and error states to `~/.local/state/homelab/gitops/<target>.status.json`.
 
 ---
 
