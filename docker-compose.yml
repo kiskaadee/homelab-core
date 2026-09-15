@@ -212,6 +212,7 @@ services:
     restart: always
     volumes:
       - ./config/homepage:/app/config
+      - ./config/homepage/icons:/app/public/icons:ro
     environment:
       - HOMEPAGE_ALLOWED_HOSTS=${HOMEPAGE_DOMAIN:-dashboard.${DOMAIN}}
     networks:

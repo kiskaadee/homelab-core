@@ -734,6 +734,32 @@ def cmd_sync_homepage(args):
 
     # Group by homepage group
     groups = {}
+
+    # 1. Add Core Infrastructure services
+    core_group = "Core Infrastructure"
+    groups[core_group] = []
+    core_metadata = {
+        "traefik": {"title": "Traefik", "icon": "traefik.png", "weight": 10},
+        "authelia": {"title": "Authelia", "icon": "authelia.png", "weight": 20},
+        "portainer": {"title": "Portainer", "icon": "portainer.png", "weight": 30},
+        "dozzle": {"title": "Dozzle", "icon": "dozzle.png", "weight": 40},
+    }
+    for svc in get_core_services():
+        name = svc["name"]
+        if name in core_metadata and svc["domain"] != "internal":
+            meta = core_metadata[name]
+            groups[core_group].append({
+                "title": meta["title"],
+                "icon": meta["icon"],
+                "href": f"https://{svc['domain']}",
+                "description": svc["desc"],
+                "server": "my-docker",
+                "container": svc["container"],
+                "weight": meta["weight"],
+            })
+
+    # 2. Add Site applications
+    icons_dir = os.path.join(homepage_dir, "icons")
     for app in visible_apps:
         hp = app.get("homepage", {})
         group_name = hp.get("group", "Applications")
@@ -745,6 +771,24 @@ def cmd_sync_homepage(args):
         container = hp.get("container", app["name"])
         weight = hp.get("weight", 50)
         desc = app.get("description", "")
+
+        # Resolve custom local icons mounted in config/homepage/icons
+        if (
+            os.path.isdir(icons_dir)
+            and not icon.startswith(("/", "http"))
+            and (
+                os.path.isfile(os.path.join(icons_dir, icon))
+                or os.path.isfile(os.path.join(icons_dir, f"{icon}.svg"))
+                or os.path.isfile(os.path.join(icons_dir, f"{icon}.png"))
+            )
+        ):
+            if not icon.endswith((".svg", ".png", ".webp")):
+                if os.path.isfile(os.path.join(icons_dir, f"{icon}.svg")):
+                    icon = f"/icons/{icon}.svg"
+                else:
+                    icon = f"/icons/{icon}.png"
+            else:
+                icon = f"/icons/{icon}"
 
         card_data = {
             "title": card_title,
@@ -758,7 +802,13 @@ def cmd_sync_homepage(args):
         groups[group_name].append(card_data)
 
     # Preferred group order
-    preferred_order = ["Knowledge & Notes", "Media & Productivity", "Development & AI", "Applications"]
+    preferred_order = [
+        "Core Infrastructure",
+        "Knowledge & Notes",
+        "Media & Productivity",
+        "Development & AI",
+        "Applications",
+    ]
     sorted_groups = []
     for g in preferred_order:
         if g in groups:
