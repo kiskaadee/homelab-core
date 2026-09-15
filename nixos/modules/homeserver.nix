@@ -92,6 +92,12 @@
     };
   };
 
-  # Open ports in the firewall for Traefik, Gitea SSH, and GitOps Webhook Receiver
-  networking.firewall.allowedTCPPorts = [ 80 443 2223 9000 ];
+  # Ensure persistent directories have proper permissions for container runtimes (e.g. Stalwart UID 2000)
+  systemd.tmpfiles.rules = [
+    "d /home/kiskaadee/Core/config/stalwart/data 0777 kiskaadee users -"
+    "d /home/kiskaadee/Core/config/stalwart/etc 0777 kiskaadee users -"
+  ];
+
+  # Open ports in the firewall for Traefik, Gitea SSH, GitOps Webhook Receiver, and Mail (SMTP, Submission, SMTPS, IMAPS, ManageSieve)
+  networking.firewall.allowedTCPPorts = [ 80 443 2223 9000 25 465 587 993 4190 ];
 }
