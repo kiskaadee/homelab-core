@@ -24,6 +24,7 @@ def test_required_architectural_paths_exist():
         "scripts/gitops_dispatcher.py",
         "scripts/appctl",
         "scripts/appctl_engine.py",
+        "config/homepage",
         "tests",
     ]
 

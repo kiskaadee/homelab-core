@@ -316,6 +316,7 @@ def get_core_services():
         {"name": "portainer", "domain": "portainer.roadtotech.me", "container": "portainer", "desc": "Container Management GUI"},
         {"name": "dozzle", "domain": "logs.roadtotech.me", "container": "dozzle", "desc": "Real-time Log Viewer"},
         {"name": "socket-proxy", "domain": "internal", "container": "socket-proxy", "desc": "Docker Socket Security Proxy"},
+        {"name": "homepage", "domain": "dashboard.roadtotech.me", "container": "homepage", "desc": "Application Dashboard & System Portal"},
         {"name": "diun", "domain": "internal", "container": "diun", "desc": "Docker Image Update Notifier"},
         {"name": "watchtower", "domain": "internal", "container": "watchtower", "desc": "Automated Container Updates"},
     ]
@@ -715,15 +716,17 @@ def cmd_complete(args):
 
 
 def cmd_sync_homepage(args):
-    """Compile Sites/*/app.yaml into homelab-dashboard/config/services.yaml."""
-    dashboard_dir = os.path.join(SITES_DIR, "homelab-dashboard")
+    """Compile Sites/*/app.yaml into Core/config/homepage/services.yaml."""
+    homepage_dir = os.path.join(CORE_DIR, "config", "homepage")
     for a in args:
-        if a.startswith("--dashboard-dir="):
-            dashboard_dir = a.split("=", 1)[1]
+        if a.startswith("--homepage-dir="):
+            homepage_dir = a.split("=", 1)[1]
+        elif a.startswith("--dashboard-dir="):
+            homepage_dir = os.path.join(a.split("=", 1)[1], "config")
 
-    services_yaml_path = os.path.join(dashboard_dir, "config", "services.yaml")
+    services_yaml_path = os.path.join(homepage_dir, "services.yaml")
     if not os.path.isdir(os.path.dirname(services_yaml_path)):
-        print(f"❌ Error: Dashboard directory not found at {dashboard_dir}")
+        print(f"❌ Error: Homepage directory not found at {homepage_dir}")
         sys.exit(1)
 
     apps = get_all_apps()

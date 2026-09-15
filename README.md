@@ -231,7 +231,7 @@ networks:
 ```bash
 appctl up myapp
 ```
-`appctl` will start the container, inject standard environment variables, and automatically recompile [`homelab-dashboard/config/services.yaml`](file:///home/kiskaadee/Sites/homelab-dashboard/config/services.yaml).
+`appctl` will start the container, inject standard environment variables, and automatically recompile [`config/homepage/services.yaml`](config/homepage/services.yaml).
 
 ---
 

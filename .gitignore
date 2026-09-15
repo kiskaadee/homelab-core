@@ -21,8 +21,11 @@ config/authelia/users.yaml
 # Diun Databases
 config/diun/diun.db
 
-# Homepage Logs
+# Homepage Logs & Generated Runtime State
 config/homepage/logs/
+config/homepage/services.yaml
+config/homepage/custom.css
+config/homepage/custom.js
 
 # OS & Editor Metadata
 .DS_Store
