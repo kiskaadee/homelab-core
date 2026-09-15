@@ -13,8 +13,20 @@ import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-SITES_DIR = os.environ.get("SITES_DIR", os.path.expanduser("~/Sites"))
-CORE_DIR = os.environ.get("CORE_DIR", os.path.expanduser("~/Core"))
+CORE_DIR = os.environ.get(
+    "CORE_DIR",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+SITES_DIR = os.environ.get(
+    "SITES_DIR",
+    os.path.join(os.path.dirname(CORE_DIR), "Sites")
+    if os.path.isdir(os.path.join(os.path.dirname(CORE_DIR), "Sites"))
+    else (
+        os.path.expanduser("~/Sites")
+        if os.path.isdir(os.path.expanduser("~/Sites"))
+        else os.path.expanduser("~/Homelab/Sites")
+    ),
+)
 ENV_FILE = os.environ.get("ENV_FILE", "/run/secrets/rendered/traefik-deployments.env")
 if not os.path.isfile(ENV_FILE) and os.path.isfile("/run/secrets/traefik-deployments.env"):
     ENV_FILE = "/run/secrets/traefik-deployments.env"
@@ -773,22 +785,22 @@ def cmd_sync_homepage(args):
         desc = app.get("description", "")
 
         # Resolve custom local icons mounted in config/homepage/icons
-        if (
-            os.path.isdir(icons_dir)
-            and not icon.startswith(("/", "http"))
-            and (
-                os.path.isfile(os.path.join(icons_dir, icon))
-                or os.path.isfile(os.path.join(icons_dir, f"{icon}.svg"))
-                or os.path.isfile(os.path.join(icons_dir, f"{icon}.png"))
-            )
-        ):
-            if not icon.endswith((".svg", ".png", ".webp")):
+        base_icon, ext = os.path.splitext(icon)
+        matched_icon = None
+        if os.path.isdir(icons_dir) and not icon.startswith(("/", "http")):
+            if os.path.isfile(os.path.join(icons_dir, icon)):
+                matched_icon = icon
+            elif ext and os.path.isfile(os.path.join(icons_dir, f"{base_icon}.svg")):
+                matched_icon = f"{base_icon}.svg"
+            elif ext and os.path.isfile(os.path.join(icons_dir, f"{base_icon}.png")):
+                matched_icon = f"{base_icon}.png"
+            elif not ext:
                 if os.path.isfile(os.path.join(icons_dir, f"{icon}.svg")):
-                    icon = f"/icons/{icon}.svg"
-                else:
-                    icon = f"/icons/{icon}.png"
-            else:
-                icon = f"/icons/{icon}"
+                    matched_icon = f"{icon}.svg"
+                elif os.path.isfile(os.path.join(icons_dir, f"{icon}.png")):
+                    matched_icon = f"{icon}.png"
+        if matched_icon:
+            icon = f"/icons/{matched_icon}"
 
         card_data = {
             "title": card_title,
