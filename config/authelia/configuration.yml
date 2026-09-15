@@ -39,8 +39,8 @@ access_control:
 session:
   name: authelia_session
   secret: '{{ env "AUTHELIA_SESSION_SECRET" }}'
-  expiration: 43200
-  inactivity: 3600
+  expiration: 7d
+  inactivity: 3d
   remember_me: 1M
   cookies:
     - domain: '{{ env "DOMAIN" }}'
