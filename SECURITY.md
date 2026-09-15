@@ -55,7 +55,7 @@ Home connections are vulnerable to bandwidth saturation.
 
 ## 🛠️ Security Checklist for Production
 - [ ] Manage all production secrets declaratively in `nixos/secrets.yaml` encrypted with Age / SOPS.
-- [ ] Maintain user password hashes in `nixos/secrets.yaml` (`authelia/users/<user>/password_hash`).
+- [ ] Maintain user accounts and group memberships dynamically in LLDAP (`users.roadtotech.me`).
 - [ ] Verify `X-Gitea-Signature` webhook secret is populated in `nixos/secrets.yaml` (`gitops/webhook_secret`).
 - [ ] Run `./scripts/test` and `nix flake check` before applying changes to verify structural and security invariants.
 - [ ] Disable Traefik/Authelia access from the public internet if only local use is needed (via Firewall/IP Whitelisting).

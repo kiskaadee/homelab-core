@@ -8,22 +8,39 @@ totp:
   issuer: authelia.com
 
 authentication_backend:
-  file:
-    path: /config/users.yml
+  ldap:
+    implementation: custom
+    address: 'ldap://lldap:3890'
+    timeout: 5s
+    start_tls: false
+    base_dn: 'dc=roadtotech,dc=me'
+    additional_users_dn: 'ou=people'
+    users_filter: '(&({username_attribute}={input})(objectClass=person))'
+    additional_groups_dn: 'ou=groups'
+    groups_filter: '(member={dn})'
+    attributes:
+      distinguished_name: 'dn'
+      username: 'uid'
+      display_name: 'displayName'
+      mail: 'mail'
+      group_name: 'cn'
+    user: 'uid=admin,ou=people,dc=roadtotech,dc=me'
 
 access_control:
   default_policy: deny
   rules:
     - domain: 'auth.{{ env "DOMAIN" }}'
       policy: bypass
+    - domain: 'users.{{ env "DOMAIN" }}'
+      policy: one_factor
     - domain: '*.{{ env "DOMAIN" }}'
       policy: one_factor
 
 session:
   name: authelia_session
   secret: '{{ env "AUTHELIA_SESSION_SECRET" }}'
-  expiration: 3600
-  inactivity: 300
+  expiration: 43200
+  inactivity: 3600
   remember_me: 1M
   cookies:
     - domain: '{{ env "DOMAIN" }}'

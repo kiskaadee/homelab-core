@@ -32,6 +32,9 @@
         python3Packages.pyyaml
         ruff
       ];
+      shellHook = ''
+        git config core.hooksPath .githooks 2>/dev/null || true
+      '';
     };
 
     checks.${system} = {

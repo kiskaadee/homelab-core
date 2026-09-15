@@ -99,18 +99,53 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  lldap:
+    image: nitnelave/lldap:stable
+    container_name: lldap
+    restart: always
+    environment:
+      - TZ=America/Bogota
+      - LLDAP_HTTP_URL=https://users.${DOMAIN}
+      - LLDAP_LDAP_BASE_DN=dc=roadtotech,dc=me
+      - LLDAP_JWT_SECRET=${LLDAP_JWT_SECRET}
+      - LLDAP_KEY_SEED=${LLDAP_KEY_SEED}
+      - LLDAP_LDAP_USER_PASS=${LLDAP_LDAP_USER_PASS}
+      - LLDAP_LDAP_USER_EMAIL=admin@${DOMAIN:-roadtotech.me}
+      - LLDAP_DATABASE_URL=sqlite:///data/users.db?mode=rwc
+    volumes:
+      - ./config/lldap/data:/data
+    networks:
+      - proxy-net
+    labels:
+      - "traefik.enable=true"
+      # Public (HTTPS)
+      - "traefik.http.routers.lldap.rule=Host(`users.${DOMAIN}`)"
+      - "traefik.http.routers.lldap.entrypoints=websecure"
+      - "traefik.http.routers.lldap.tls=true"
+      - "traefik.http.routers.lldap.tls.certresolver=myresolver"
+      - "traefik.http.routers.lldap.service=lldap-svc"
+      - "traefik.http.routers.lldap.middlewares=authelia-auth@docker"
+      # Public (Redirect)
+      - "traefik.http.routers.lldap-red.rule=Host(`users.${DOMAIN}`)"
+      - "traefik.http.routers.lldap-red.entrypoints=web"
+      - "traefik.http.routers.lldap-red.middlewares=https-redirect@docker"
+      - "traefik.http.services.lldap-svc.loadbalancer.server.port=17170"
+
   authelia:
     image: authelia/authelia:latest
     container_name: authelia
     restart: always
+    user: "1000:100"
+    depends_on:
+      - lldap
     volumes:
       - ./config/authelia:/config
-      - /run/secrets/rendered/users.yml:/config/users.yml:ro
     environment:
       - DOMAIN=${DOMAIN}
       - AUTHELIA_SESSION_SECRET=${AUTHELIA_SESSION_SECRET}
       - AUTHELIA_STORAGE_ENCRYPTION_KEY=${AUTHELIA_STORAGE_ENCRYPTION_KEY}
       - AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET=${AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET}
+      - AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD=${AUTHELIA_LDAP_PASSWORD:-${LLDAP_LDAP_USER_PASS}}
       - X_AUTHELIA_CONFIG_FILTERS=template
     networks:
       - proxy-net
@@ -226,6 +261,7 @@ services:
       - "traefik.http.routers.homepage.tls=true"
       - "traefik.http.routers.homepage.tls.certresolver=myresolver"
       - "traefik.http.routers.homepage.service=homepage-svc"
+      - "traefik.http.routers.homepage.middlewares=authelia-auth@docker"
       # Public (Redirect)
       - "traefik.http.routers.homepage-red.rule=Host(`${HOMEPAGE_DOMAIN:-dashboard.${DOMAIN}}`)"
       - "traefik.http.routers.homepage-red.entrypoints=web"

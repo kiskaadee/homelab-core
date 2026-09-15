@@ -3,38 +3,6 @@
 
 { config, lib, pkgs, ... }:
 
-let
-  # Declarative user database for Authelia
-  autheliaUsers = {
-    kiskaadee = {
-      displayName = "kiskaadee";
-      email = "fcortesbio@gmail.com";
-      groups = [ "admins" "dev" ];
-      passwordPlaceholder = config.sops.placeholder."authelia/users/kiskaadee/password_hash";
-    };
-    misa = {
-      displayName = "misa";
-      email = "icdf0728@gmail.com";
-      groups = [ "users" ];
-      passwordPlaceholder = config.sops.placeholder."authelia/users/misa/password_hash";
-    };
-    valenvg = {
-      displayName = "valenvg";
-      email = "vegavalentina069@gmail.com";
-      groups = [ "users" ];
-      passwordPlaceholder = config.sops.placeholder."authelia/users/valenvg/password_hash";
-    };
-  };
-
-  renderUser = username: user: "  " + username + ":\n"
-    + "    displayname: \"" + user.displayName + "\"\n"
-    + "    password: '" + user.passwordPlaceholder + "'\n"
-    + "    email: \"" + user.email + "\"\n"
-    + "    groups:\n"
-    + (lib.concatMapStringsSep "\n" (g: "      - " + g) user.groups);
-
-  renderedUsersYaml = "users:\n" + (lib.concatStringsSep "\n\n" (lib.mapAttrsToList renderUser autheliaUsers)) + "\n";
-in
 {
   # Define the keys to decrypt from secrets.yaml
   sops.secrets = lib.genAttrs [
@@ -43,9 +11,9 @@ in
     "authelia/session_secret"
     "authelia/storage_encryption_key"
     "authelia/jwt_secret"
-    "authelia/users/kiskaadee/password_hash"
-    "authelia/users/misa/password_hash"
-    "authelia/users/valenvg/password_hash"
+    "lldap/jwt_secret"
+    "lldap/key_seed"
+    "lldap/admin_password"
     "gitops/webhook_secret"
   ] (name: { owner = "kiskaadee"; });
 
@@ -60,13 +28,11 @@ in
       AUTHELIA_SESSION_SECRET = config.sops.placeholder."authelia/session_secret";
       AUTHELIA_STORAGE_ENCRYPTION_KEY = config.sops.placeholder."authelia/storage_encryption_key";
       AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET = config.sops.placeholder."authelia/jwt_secret";
+      LLDAP_JWT_SECRET = config.sops.placeholder."lldap/jwt_secret";
+      LLDAP_KEY_SEED = config.sops.placeholder."lldap/key_seed";
+      LLDAP_LDAP_USER_PASS = config.sops.placeholder."lldap/admin_password";
+      AUTHELIA_LDAP_PASSWORD = config.sops.placeholder."lldap/admin_password";
     };
-  };
-
-  # Generate the declarative Authelia user database file at runtime in /run/secrets/users.yml
-  sops.templates."users.yml" = {
-    owner = "kiskaadee";
-    content = renderedUsersYaml;
   };
 
   # Define the declarative systemd service to manage the homeserver container stack

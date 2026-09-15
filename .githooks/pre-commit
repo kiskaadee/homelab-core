@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -e
+
+# ==============================================================================
+# Homelab Core Pre-Commit Invariant & Quality Gate Hook
+# Runs linter (Ruff) and architecture & security test suite (Pytest)
+# ==============================================================================
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+echo "🔍 [pre-commit] Executing Homelab Core invariant checks..."
+
+# 1. Run Ruff Linter
+echo "  ↳ Linting repository with Ruff..."
+if command -v uv >/dev/null 2>&1; then
+    uv run ruff check .
+elif command -v ruff >/dev/null 2>&1; then
+    ruff check .
+elif command -v nix >/dev/null 2>&1 && [ -f flake.nix ]; then
+    nix develop --command ruff check .
+else
+    echo "⚠️  [pre-commit] Neither uv, ruff, nor nix found; skipping ruff"
+fi
+
+# 2. Run Pytest Suite
+echo "  ↳ Running structural and security test suite with Pytest..."
+if command -v uv >/dev/null 2>&1; then
+    uv run --with pytest --with pyyaml pytest tests/
+elif command -v pytest >/dev/null 2>&1; then
+    pytest tests/
+elif command -v nix >/dev/null 2>&1 && [ -f flake.nix ]; then
+    nix develop --command pytest tests/
+else
+    echo "⚠️  [pre-commit] Neither uv, pytest, nor nix found; skipping pytest"
+fi
+
+echo "✅ [pre-commit] All repository checks passed successfully!"

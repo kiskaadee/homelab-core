@@ -11,11 +11,12 @@ config/letsencrypt/*
 **/*.pem
 **/*.bak
 
-# Authelia Databases & Mail Logs
+# Authelia & LLDAP Databases
 config/authelia/db.sqlite3
 config/authelia/emails.txt
 config/authelia/users.yml
 config/authelia/users.yaml
+config/lldap/data/
 
 
 # Diun Databases
@@ -38,4 +39,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+
+# Local Bootstrap & Operational Scripts
+scripts/bootstrap_lldap_users.py
+scripts/bootstrap_*.py
 

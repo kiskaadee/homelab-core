@@ -17,6 +17,17 @@ export CORE_DIR="${CORE_DIR:-$HOME/Core}"
 export ENV_FILE
 
 # Source global secrets/environment if available
+HOMESERVER_ENV="/run/secrets/rendered/homeserver.env"
+if [ ! -f "$HOMESERVER_ENV" ] && [ -f "/run/secrets/homeserver.env" ]; then
+  HOMESERVER_ENV="/run/secrets/homeserver.env"
+fi
+if [ -f "$HOMESERVER_ENV" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$HOMESERVER_ENV"
+  set +a
+fi
+
 if [ -f "$ENV_FILE" ]; then
   set -a
   # shellcheck disable=SC1090

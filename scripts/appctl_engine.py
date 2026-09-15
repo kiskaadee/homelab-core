@@ -325,6 +325,7 @@ def get_core_services():
     core_services = [
         {"name": "traefik", "domain": "traefik.roadtotech.me", "container": "traefik", "desc": "Edge Reverse Proxy & ACME TLS"},
         {"name": "authelia", "domain": "auth.roadtotech.me", "container": "authelia", "desc": "Identity & SSO Access Control"},
+        {"name": "lldap", "domain": "users.roadtotech.me", "container": "lldap", "desc": "Lightweight LDAP User & Group Directory"},
         {"name": "portainer", "domain": "portainer.roadtotech.me", "container": "portainer", "desc": "Container Management GUI"},
         {"name": "dozzle", "domain": "logs.roadtotech.me", "container": "dozzle", "desc": "Real-time Log Viewer"},
         {"name": "socket-proxy", "domain": "internal", "container": "socket-proxy", "desc": "Docker Socket Security Proxy"},
@@ -753,6 +754,7 @@ def cmd_sync_homepage(args):
     core_metadata = {
         "traefik": {"title": "Traefik", "icon": "traefik.png", "weight": 10},
         "authelia": {"title": "Authelia", "icon": "authelia.png", "weight": 20},
+        "lldap": {"title": "LLDAP Directory", "icon": "lldap.png", "weight": 25},
         "portainer": {"title": "Portainer", "icon": "portainer.png", "weight": 30},
         "dozzle": {"title": "Dozzle", "icon": "dozzle.png", "weight": 40},
     }

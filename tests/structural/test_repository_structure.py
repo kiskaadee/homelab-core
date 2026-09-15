@@ -3,6 +3,7 @@ Structural invariant tests for Homelab Core repository layout.
 Ensures required architectural components exist and deprecated paths do not return.
 """
 
+import os
 from pathlib import Path
 
 CORE_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -25,12 +26,17 @@ def test_required_architectural_paths_exist():
         "scripts/appctl",
         "scripts/appctl_engine.py",
         "config/homepage",
+        ".githooks/pre-commit",
         "tests",
     ]
 
     for p in required_paths:
         target = CORE_ROOT / p
         assert target.exists(), f"Required architectural path missing: {p}"
+
+    pre_commit = CORE_ROOT / ".githooks" / "pre-commit"
+    assert pre_commit.is_file(), ".githooks/pre-commit must be a regular file"
+    assert os.access(pre_commit, os.X_OK), ".githooks/pre-commit must be marked executable"
 
 
 def test_deprecated_legacy_structures_are_absent():
