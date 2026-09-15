@@ -15,6 +15,8 @@
     "lldap/key_seed"
     "lldap/admin_password"
     "gitops/webhook_secret"
+    "brevo/smtp_login"
+    "brevo/smtp_key"
   ] (name: { owner = "kiskaadee"; });
 
   # Generate the unified environment file at runtime in /run/secrets/homeserver.env
@@ -32,6 +34,10 @@
       LLDAP_KEY_SEED = config.sops.placeholder."lldap/key_seed";
       LLDAP_LDAP_USER_PASS = config.sops.placeholder."lldap/admin_password";
       AUTHELIA_LDAP_PASSWORD = config.sops.placeholder."lldap/admin_password";
+      SMTP_SERVER = "smtp-relay.brevo.com";
+      SMTP_PORT = "587";
+      SMTP_LOGIN = config.sops.placeholder."brevo/smtp_login";
+      SMTP_KEY = config.sops.placeholder."brevo/smtp_key";
     };
   };
 

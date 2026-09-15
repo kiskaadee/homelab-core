@@ -326,6 +326,7 @@ def get_core_services():
         {"name": "traefik", "domain": "traefik.roadtotech.me", "container": "traefik", "desc": "Edge Reverse Proxy & ACME TLS"},
         {"name": "authelia", "domain": "auth.roadtotech.me", "container": "authelia", "desc": "Identity & SSO Access Control"},
         {"name": "lldap", "domain": "users.roadtotech.me", "container": "lldap", "desc": "Lightweight LDAP User & Group Directory"},
+        {"name": "stalwart", "domain": "mail.roadtotech.me", "container": "stalwart", "desc": "All-in-one Mail Server & JMAP/IMAP/SMTP"},
         {"name": "portainer", "domain": "portainer.roadtotech.me", "container": "portainer", "desc": "Container Management GUI"},
         {"name": "dozzle", "domain": "logs.roadtotech.me", "container": "dozzle", "desc": "Real-time Log Viewer"},
         {"name": "socket-proxy", "domain": "internal", "container": "socket-proxy", "desc": "Docker Socket Security Proxy"},

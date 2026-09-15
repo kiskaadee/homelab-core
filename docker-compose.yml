@@ -240,6 +240,43 @@ services:
       - ./config/diun:/data
     networks:
       - socket-net
+  
+  stalwart:
+    image: stalwartlabs/stalwart:v0.16.22
+    container_name: stalwart
+    restart: always
+    depends_on:
+      - lldap
+    ports: 
+      - "25:25"       # Inbound SMTP (receiving mail)
+      - "465:465"     # SMTPS (Submission with implicit TLS)
+      - "587:587"     # SMTP Submission (STARTTLS for mail clients)
+      - "993:993"     # IMAPS (Encrypted IMAP for Thunderbird/mobile)
+      - "4190:4190"   # ManageSieve (Server-side mail rules)
+    volumes: 
+      - ./config/stalwart/etc:/etc/stalwart
+      - ./config/stalwart/data:/var/lib/stalwart
+    environment:
+      - DOMAIN=${DOMAIN}
+      - STALWART_PUBLIC_URL=https://mail.${DOMAIN}
+      - STALWART_RECOVERY_ADMIN=admin:${LLDAP_LDAP_USER_PASS}
+    networks:
+      - proxy-net
+    labels: 
+      - "traefik.enable=true"
+      # HTTPS WebAdmin & JMAP Router
+      - "traefik.http.routers.stalwart.rule=Host(`mail.${DOMAIN}`)"
+      - "traefik.http.routers.stalwart.entrypoints=websecure"
+      - "traefik.http.routers.stalwart.tls=true"
+      - "traefik.http.routers.stalwart.tls.certresolver=myresolver"
+      - "traefik.http.routers.stalwart.service=stalwart-svc"
+      # HTTP -> HTTPS Redirect
+      - "traefik.http.routers.stalwart-red.rule=Host(`mail.${DOMAIN}`)"
+      - "traefik.http.routers.stalwart-red.entrypoints=web"
+      - "traefik.http.routers.stalwart-red.middlewares=https-redirect@docker"
+      # Forward to Stalwart's internal HTTP/WebAdmin port
+      - "traefik.http.services.stalwart-svc.loadbalancer.server.port=8080"
+
 
   homepage:
     image: ghcr.io/gethomepage/homepage:latest
