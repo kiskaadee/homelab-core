@@ -102,6 +102,10 @@
   };
 
   environment.systemPackages = with pkgs; [
+    # Core orchestrator wrapper (available system-wide including non-interactive SSH)
+    (writeShellScriptBin "appctl" ''
+      exec "''${CORE_DIR:-$HOME/Core}/scripts/appctl" "$@"
+    '')
     # Monitoring & diagnostics
     htop
     iotop

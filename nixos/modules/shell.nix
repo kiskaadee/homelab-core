@@ -20,6 +20,12 @@
     qpdf       # PDF decryption (used by pdf_dc function)
   ];
 
+  # ── Environment & PATH ────────────────────────────────────────────────────────
+  # Export Core scripts and user bin to /etc/set-environment so all subshells inherit them
+  environment.extraInit = ''
+    export PATH="$HOME/Core/scripts:$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+  '';
+
   # ── Bash configuration ────────────────────────────────────────────────────────
   programs.bash = {
     shellAliases = {
