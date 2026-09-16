@@ -1,62 +1,59 @@
-# Security Policy & Hardening Overview
+# 🛡️ Homelab Core — Security Controls & Hardening
 
-This document outlines the security posture of the **Hardened Private Cloud Hub** and provides guidance on maintaining a secure environment.
-
-## 🛡️ Implemented Hardening Measures
-
-### 1. Docker Socket Isolation (Socket-Proxy)
-The most critical security feature. No container (including Traefik or Portainer) has direct access to the host's `/var/run/docker.sock`.
-- **Mechanism**: The `socket-proxy` container is the *only* one with access to the real socket.
-- **Filtering**: It uses HAProxy to filter API calls. Traefik can see containers and networks but cannot create/delete them. Management tools like Watchtower are granted specific POST/DELETE permissions only through this proxy.
-- **Benefit**: Even if an attacker compromises Traefik, they cannot use the Docker API to spin up a privileged container and take over the host (a common "container breakout" attack).
-
-### 2. Identity & Access Management (Authelia)
-- **SSO**: All management tools (Traefik Dash, Dozzle, Portainer) and critical apps (Gitea) are behind Authelia.
-- **2FA Support**: Authelia supports TOTP (Google Authenticator, etc.) and FIDO2 (Yubikey).
-- **Forward Auth**: Traefik intercepts all requests and validates the session with Authelia before the request ever reaches the target app.
-
-### 3. Network Segmentation
-- **`proxy-net`**: Shared network for Traefik to route traffic to apps.
-- **`socket-net`**: Highly restricted network for infrastructure-to-socket communication. Application containers are **not** members of this network.
-
-### 4. Automated Maintenance
-- **Watchtower**: Automatically updates containers when new security patches are released for their images.
-
-### 5. GitOps Admission & Trust Boundary Hardening
-The webhook deployment engine (`scripts/gitops_dispatcher.py`) implements a zero-trust admission model:
-- **Cryptographic Authentication**: Every request must carry an HMAC-SHA256 signature (`X-Gitea-Signature`) validated in constant-time against a SOPS-managed secret.
-- **Trusted Repository Resolution**: Payloads cannot specify filesystem paths. Logical repository identities are mapped to local directories with strict regex validation, path traversal defense (`../`), and symlink escape checks.
-- **Zero Arbitrary Shell Execution**: The `custom:` execution handler and `shell=True` have been eliminated. Only closed, allowlisted actions (`git_pull`, `compose_up`, `compose_build`, `compose_restart`) are executable.
-- **Serialized Asynchronous Worker**: Admissions write atomic pending states and return HTTP 200 immediately. Non-blocking `flock` workers serialize deployments and supersede obsolete intermediate commits.
+This document outlines the security controls, container isolation rules, and operational boundaries implemented in **Homelab Core**.
 
 ---
 
-## ⚠️ Potential Attack Vectors & Concerns
+## 1. Implemented Security Controls
 
-Despite the hardening, you should remain vigilant about the following:
+### A. Docker Socket Isolation (`socket-proxy`)
+* Direct container mounts of `/var/run/docker.sock` are restricted.
+* Only the dedicated `socket-proxy` container mounts `/var/run/docker.sock:ro`.
+* State-modifying and execution API endpoints are disabled in HAProxy (`POST=0`, `DELETE=0`, `BUILD=0`, `EXEC=0`, `COMMIT=0`, `CONFIGS=0`, `DISTRIBUTION=0`, `NODES=0`, `PLUGINS=0`, `SECRETS=0`, `SWARM=0`, `SYSTEM=0`).
+* Traefik, Portainer, and Dozzle query Docker metrics and metadata via `tcp://socket-proxy:2375` rather than direct socket mounts.
 
-### 1. Host-Level Security (The Foundation)
-If an attacker gains SSH access to your host, they have control over the system.
-- **Action**: Use SSH Keys exclusively (`PermitRootLogin = "no"` is enforced by NixOS). Keep your Nix flake inputs and system updated (`sudo nixos-rebuild switch --flake ~/Core#server`).
+### B. Identity & Access Management (`lldap` & `authelia`)
+* **Directory Service**: User accounts and group memberships are stored in LLDAP (`users.roadtotech.me`).
+* **ForwardAuth**: Traefik intercepts incoming HTTP/HTTPS requests and validates sessions with Authelia (`auth.roadtotech.me`) before routing to protected backends.
+* **MFA Support**: Supports TOTP and FIDO2 authentication.
 
-### 2. Application-Specific Vulnerabilities
-A zero-day exploit in Gitea or Ollama could allow an attacker to execute code *inside* that specific container.
-- **Mitigation**: Containers run as non-root users where possible. The `socket-proxy` ensures they cannot escape to the host easily.
+### C. Network Segmentation
+* **`proxy-net`**: Bridge network connecting Traefik to backend application containers.
+* **`socket-net`**: Restricted bridge network connecting infrastructure daemons to `socket-proxy`. Workload applications in `~/Sites` are not attached to `socket-net`.
 
-### 3. Let's Encrypt / ACME Exposure
-The `acme.json` file contains your private keys.
-- **Action**: This file is restricted to `chmod 600`. Never share it or commit it to version control.
+### D. Webhook Admission Controls
+* **HMAC-SHA256 Signatures**: Webhook requests are verified using `hmac.compare_digest` against `/run/secrets/gitops/webhook_secret`.
+* **Trusted Name Resolution**: Webhook payloads specify logical repository names; filesystem path traversal (`..`, `/`) and symlink escapes are rejected.
+* **Non-Shell Execution**: Deployment commands execute as fixed argument lists without `shell=True`. Custom shell commands fail validation closed.
+* **Revision-Consistent Validation**: Manifest deployment policy is re-validated directly on the deployed commit immediately post-pull.
 
-### 4. Denial of Service (DDoS)
-Home connections are vulnerable to bandwidth saturation.
-- **Mitigation**: Consider using a Cloudflare Tunnel or a VPS-based "Entry Node" if you expect high traffic or targeted attacks.
+### E. Declarative Secrets Encryption (`sops-nix`)
+* Secrets are stored encrypted in `nixos/secrets.yaml` using Age keys derived from the host SSH key (`/etc/ssh/ssh_host_ed25519_key`).
+* Decrypted secrets reside in RAM-backed ephemeral filesystems (`/run/secrets/`, `/run/credentials/`) and are not committed to unencrypted persistent files.
 
 ---
 
-## 🛠️ Security Checklist for Production
-- [ ] Manage all production secrets declaratively in `nixos/secrets.yaml` encrypted with Age / SOPS.
-- [ ] Maintain user accounts and group memberships dynamically in LLDAP (`users.roadtotech.me`).
-- [ ] Verify `X-Gitea-Signature` webhook secret is populated in `nixos/secrets.yaml` (`gitops/webhook_secret`).
-- [ ] Run `./scripts/test` and `nix flake check` before applying changes to verify structural and security invariants.
-- [ ] Disable Traefik/Authelia access from the public internet if only local use is needed (via Firewall/IP Whitelisting).
-- [ ] Ensure `config/letsencrypt/acme.json` is backed up securely but kept private (chmod 600).
+## 2. Threat Model & Operational Considerations
+
+### Host Access
+* SSH root login is disabled (`PermitRootLogin = "no"`). Access is authenticated via ED25519 public keys.
+* Unneeded services (such as printing, bluetooth, sleep/suspend targets) are disabled at the NixOS configuration level.
+
+### ACME Certificates
+* Let's Encrypt keys in `config/letsencrypt/acme.json` are maintained with mode `0600`.
+
+### Workload Containment
+* Applications run in dedicated containers attached to `proxy-net`.
+* Application manifests cannot request arbitrary host commands through the GitOps engine.
+
+---
+
+## 3. Verification Checklist
+
+- [x] Secrets encrypted in `nixos/secrets.yaml` via Age / SOPS.
+- [x] User identities managed in LLDAP (`users.roadtotech.me`).
+- [x] `socket-proxy` configured with `POST=0`, `DELETE=0`, `BUILD=0`, `EXEC=0`.
+- [x] Webhook HMAC signature verification active on port 9000.
+- [x] Invariant test runner (`./scripts/test`) passing on changes.
+- [x] `config/letsencrypt/acme.json` permissions set to `0600`.
+- [x] Host firewall ports restricted to declared services in `nixos/modules/homeserver.nix`.

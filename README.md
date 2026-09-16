@@ -1,278 +1,158 @@
-# 🌐 Traefik Homelab Core
+# 🌐 Homelab Core — Appliance & Platform Reference
 
-Welcome to the **Traefik Homelab Core Control Plane** — the central orchestrator, security perimeter, and edge gateway for the `roadtotech.me` homelab cluster.
+**Homelab Core** is the declarative NixOS appliance and platform foundation for the `roadtotech.me` homelab cluster.
 
-This repository implements a **Hardened Hub** architecture where routing, SSL termination, identity management, container isolation, and orchestration are managed centrally, while user applications live in independent repositories in `~/Sites`.
+It provides host operating system configuration, edge routing, automated wildcard TLS certificate issuance, identity and access management, mail transport, container socket isolation, workload orchestration, and continuous GitOps deployment.
 
 ---
 
-## 🏗️ Architectural Overview & Component Roles
+## 🏛️ System Architecture & Boundaries
 
-The infrastructure is strictly divided into two operational tiers:
+The homelab ecosystem separates **ownership**, **runtime architecture**, and **cross-cutting orchestration**:
+
+### 1. Ownership: Core vs. Sites
+* **Core (`~/Core`) owns platform mechanics**: System services, host firewall, edge ingress, security barriers, deployment serialization, and secret distribution.
+* **Workload Plane (`~/Sites`) owns application intent**: Workloads are self-describing via `app.yaml` and independent `docker-compose.yml` configurations. Workloads declare application intent; Core executes deployment.
+
+### 2. Runtime Architecture
+The system operates across four runtime layers:
+1. **Host Foundation**: Headless NixOS Linux, disk configuration, Docker daemon, systemd daemons, firewall rules, and in-memory secret files under `/run/secrets/`.
+2. **Edge Gateway**: Traefik (v3.6) reverse proxy terminating wildcard TLS (`*.roadtotech.me`) via Dynu DNS-01 Let's Encrypt validation.
+3. **Core Platform Services**: Central services in `docker-compose.yml` (Authelia SSO, LLDAP directory, Stalwart mail, SnappyMail, Homepage dashboard, Portainer, Dozzle, Watchtower, Diun, and socket-proxy).
+4. **Workload Plane**: Independent application stacks in `~/Sites` connected to the platform over the `proxy-net` Docker network.
+
+### 3. Cross-Cutting Orchestration
+* **`appctl` CLI & Engine**: Coordinates discovery, environment injection, container lifecycle actions, and Homepage compilation across workloads and Core.
+* **GitOps Webhook Dispatcher**: Listens on port 9000 (`homelab-gitops.service`), validating incoming Git push webhooks and executing declared deployment actions.
+
+---
+
+## 🗺️ System Topology & Network Architecture
 
 ```
-                          Internet (roadtotech.me)
+                                 Internet
                                     │
                                     ▼
                     ┌───────────────────────────────┐
-                    │    Traefik Edge Proxy (:443)   │
-                    │  (Wildcard Let's Encrypt TLS) │
+                    │   Traefik Edge Proxy (:443)   │
+                    │  Wildcard TLS (*.roadtotech.me│
                     └───────┬───────────────┬───────┘
                             │               │
-        Public Traffic      │               │ Auth Guarded
+      Public Traffic        │               │ ForwardAuth Protected
+      (e.g., mail, landing) │               │ (authelia-auth@docker)
                             ▼               ▼
-                   [ Landing / Public ]  [ Authelia SSO / 2FA ]
+                    [ Public Services ]  [ Authelia SSO / 2FA ]
+                            │               │ (LDAP -> LLDAP)
                             │               │
-                            │               ▼
-                            └───────► [ Data Plane Apps ]
-                                      (Sites: jellyfin, docs, etc.)
+                            ▼               ▼
+                    ┌───────────────────────────────┐
+                    │      Docker proxy-net         │
+                    ├───────────────────────────────┤
+                    │ • Core Services (Homepage,    │
+                    │   Portainer, Dozzle, etc.)    │
+                    │ • Workload Apps (~/Sites/*)   │
+                    └───────────────────────────────┘
+                                    │
+                     (Protected API via TCP:2375)
+                                    ▼
+                    ┌───────────────────────────────┐
+                    │   Docker socket-proxy         │
+                    │   (socket-net, Read-Only)     │
+                    └───────────────┬───────────────┘
+                                    │ (read-only mount)
+                                    ▼
+                        /var/run/docker.sock
 ```
 
-### 1. Control Plane Components (`~/Core`)
-* **`Traefik` (v3.6):** The edge reverse proxy and SSL terminator. Automatically obtains and maintains Let's Encrypt wildcard certificates (`*.roadtotech.me`, `roadtotech.me`) using the Dynu DNS-01 challenge. Routes incoming HTTP/HTTPS traffic to internal Docker containers over `proxy-net`.
-* **`socket-proxy` (tecnativa):** Security barrier. Prevents Traefik and other containers from having direct access to `/var/run/docker.sock`, restricting access exclusively to safe container read operations via TCP (`socket-net`).
-* **`Authelia`:** Single Sign-On (SSO) and Multi-Factor Authentication (2FA) identity gateway. Provides ForwardAuth middleware (`authelia-auth@docker`) that gates administrative dashboards and sensitive applications before traffic touches them.
-* **`Portainer CE`:** Visual GUI for container inspection, stack lifecycle management, and log tracking.
-* **`Dozzle`:** Lightweight real-time log viewer for all running containers, protected by Authelia SSO.
-* **`Watchtower` & `Diun`:** Background daemons responsible for container image update notifications and automated updates.
-
-### 2. Data Plane Applications (`~/Sites`)
-User and service applications (e.g. `dashboard`, `docs`, `jellyfin`, `excalidraw`, `gitea`, `mermaid`, `minecraft`, `ollama`, `pgsql`, `mongodb`) live in isolated, dedicated git repositories under `~/Sites`. They integrate with the Core control plane dynamically via the `proxy-net` Docker network and Traefik container labels.
+### Core Services (`docker-compose.yml`)
+| Service | Domain / Ingress | Function | Auth Policy |
+| :--- | :--- | :--- | :--- |
+| **`traefik`** | `traefik.roadtotech.me` | Edge reverse proxy, Dynu DNS-01 ACME TLS | Authelia Guard |
+| **`socket-proxy`** | Internal (`socket-net:2375`) | Read-only Docker API gateway barrier | Internal Only |
+| **`lldap`** | `users.roadtotech.me` | LDAP directory & user database | Authelia Guard |
+| **`authelia`** | `auth.roadtotech.me` | Single Sign-On (SSO) & ForwardAuth middleware | Public (Bypass) |
+| **`stalwart`** | `mail.roadtotech.me` | Mail Server (SMTP/IMAP/JMAP/Sieve) | Native / LLDAP |
+| **`snappymail`** | `webmail.roadtotech.me` | Webmail client connected to Stalwart | Native / Stalwart |
+| **`homepage`** | `dashboard.roadtotech.me` | Service portal & system dashboard | Authelia Guard |
+| **`portainer`** | `portainer.roadtotech.me` | Container management GUI (via socket-proxy) | Authelia Guard |
+| **`dozzle`** | `logs.roadtotech.me` | Container log viewer (via socket-proxy) | Authelia Guard |
+| **`watchtower`** | Internal | Automated container image updater | Internal Only |
+| **`diun`** | Internal | Container image update notifier | Internal Only |
 
 ---
 
-## 🔒 Security Model & Secrets Architecture
+## ⚡ Quick Start & Operator Workflows
 
-The security model is built on zero hardcoded secrets and defense-in-depth:
-
-```text
-[nixos/secrets.yaml] (Encrypted with SOPS + age keys)
-       │
-       ▼ (Decrypted at boot by sops-nix using host SSH key)
-[/run/secrets/rendered/homeserver.env] & [/run/secrets/rendered/traefik-deployments.env]
-       │
-       ▼ (Fed via --env-file and appctl)
-[Core & Sites Containers]
-```
-
-1. **SOPS & sops-nix Integration:** All sensitive tokens (Dynu API key, Authelia session secrets, JWT keys, database passwords) are encrypted in `nixos/secrets.yaml` and decrypted by NixOS at runtime into in-memory `/run/secrets/` and `/run/secrets/rendered/`.
-2. **Edge TLS & HSTS:** All external traffic is forced over HTTPS using Let's Encrypt wildcard certificates with strict redirect schemes (`https-redirect@docker`).
-3. **Authelia ForwardAuth:** Applications that require authentication declare `traefik.http.routers.<name>.middlewares=authelia-auth@docker`, delegating identity verification to Authelia.
-4. **Socket Isolation:** Direct Docker daemon sockets are completely hidden behind `socket-proxy`.
-
----
-
-## 🚀 Orchestration with `appctl`
-
-Applications in `~/Sites` are managed using the custom `appctl` CLI tool located in `scripts/appctl`.
-
-### Key Commands:
+### Host & System Operations
 ```bash
-# List all application stacks with runtime container health and Git sync status
+# Rebuild and switch NixOS configuration
+sudo nixos-rebuild switch --flake ~/Core#server
+# or use the built-in shell alias:
+nix-switch
+
+# Inspect systemd platform services
+systemctl status homeserver-core.service   # Core Compose stack
+systemctl status homelab-gitops.service     # GitOps webhook engine
+systemctl status dynu-monitor.service       # Smart DDNS IP monitor
+systemctl status dynu-monitor.timer         # DDNS timer (every 30m)
+```
+
+### Workload Management (`appctl`)
+```bash
+# List all application stacks with container health and Git tracking status
 appctl list
 
-# Fetch upstream git changes across all repositories before rendering status
-appctl list --fetch
+# Fetch upstream changes across all repos and inspect with SSL certificates
+appctl list --fetch --ssl --core
 
-# List all applications AND core control plane services
-appctl list --core
-
-# Display comprehensive metadata, routing, environment, and Git diagnostics
-appctl info docs
+# Inspect full diagnostic metadata for a service
 appctl info jellyfin
 
-# Start, stop, or restart an application stack
+# Start, stop, or restart an application or Core service
 appctl up docs
-appctl down jellyfin
-appctl restart dash
+appctl down mongodb
+appctl restart traefik
 
-# Full atomic stack upgrade (clean check -> git pull --ff-only -> docker compose pull -> docker compose up -d -> appctl sync)
+# Sequential stack update (clean working tree check -> git pull -> compose pull -> up -> sync)
 appctl update docs
 appctl update core
-appctl update all
 
-# Validate resolved docker compose configuration
-appctl config docs
-
-# Synchronize Homepage dashboard services.yaml from app.yaml manifests
+# Recompile Homepage services.yaml from active app.yaml manifests
 appctl sync
 ```
 
----
-
-## ⚡ Hardened GitOps Continuous Deployment
-
-Automated deployments are driven by the hardened webhook engine [`scripts/gitops_dispatcher.py`](scripts/gitops_dispatcher.py) managed via the declarative `homelab-gitops.service` systemd unit on port 9000.
-
-```
-Webhook Request (:9000)
-       │
-       ▼
-[ 1. Cryptographic HMAC Verification ] ──► (X-Gitea-Signature checked via constant-time compare against SOPS secret)
-       │
-       ▼
-[ 2. Event & Ref Admission ]           ──► (Only 'push' to 'refs/heads/*' admitted; PRs/tags rejected)
-       │
-       ▼
-[ 3. Canonical Repository Resolution ] ──► (Logical names resolved against trusted ~/Sites mapping; traversal blocked)
-       │
-       ▼
-[ 4. Manifest & Branch Admission ]     ──► (Initial policy check; pushed branch must match declared target)
-       │
-       ▼
-[ 5. Asynchronous Queue & Dispatch ]   ──► (Atomic queueing + immediate HTTP 200 return; per-repo flock worker)
-       │
-       ▼
-[ 6. Revision-Consistent Validation ]  ──► (Working tree updated to target revision; app.yaml re-validated on-tree)
-       │
-       ▼
-[ 7. Closed Execution & Status ]       ──► (Strictly allowlisted actions; persistent .status.json state tracking)
-```
-
-### GitOps Security Properties:
-* **Zero Arbitrary Shell Execution**: The `custom:` command path and `shell=True` invocations are abolished. Only closed, allowlisted actions (`git_pull`, `compose_up`, `compose_build`, `compose_restart`) are executable.
-* **Cryptographic Admission**: Every incoming webhook must provide an `X-Gitea-Signature` matching the SOPS-managed secret projected to `/run/secrets/gitops/webhook_secret`. Missing, malformed, or mismatching signatures fail closed.
-* **Trusted Identity Resolution**: Webhooks identify target applications by logical identity (`docs`, `homelab-docs`), never by filesystem path. Paths are canonicalized with strict path traversal and symlink escape defenses.
-* **Revision-Consistent Manifest Validation**: Manifests and branch authorization policies are re-validated immediately post-pull directly against the target revision working tree, preventing pre-pull configuration hijacking and ensuring deployment policy is strictly derived from the revision being deployed.
-* **Serialized Asynchronous Execution**: Webhook admissions write atomic pending requests and return HTTP 200 immediately. Detached per-repo workers serialize deployments via non-blocking `flock` and automatically supersede intermediate commits (A deploys, B arrives, C replaces B -> A finishes, then C deploys).
-* **Intentional Worker State Observation**: Workers record execution status, commit SHAs, timestamps, and error states to `~/.local/state/homelab/gitops/<target>.status.json`.
-
----
-
-## 🧪 Automated Invariant Tests & Continuous Integration
-
-Architectural boundaries and security invariants are enforced continuously by a machine-executable test suite in [`tests/`](tests/):
-
-### Test Structure:
-* **`tests/security/test_gitops_security.py`**: Webhook HMAC signatures, traversal prevention, admission gates, and race condition superseding.
-* **`tests/security/test_security_invariants.py`**: Docker socket-proxy policies (`POST=0`, `DELETE=0`), container socket isolation, and absence of `privileged: true`.
-* **`tests/structural/test_repository_structure.py`**: Repository tree integrity, absence of deprecated structures, and public domain license preservation.
-
-### Running Tests:
+### Testing & Verification
 ```bash
-# Run the complete test and invariant suite locally
+# Run the repository test suite (linting + pytest + nix flake check)
 ./scripts/test
 
-# Run pure Nix sandbox verification (runs ruff and pytest in an isolated Nix derivation)
+# Run Nix sandbox flake evaluation and checks
 nix flake check
-
-# Enter a development shell with pytest, pyyaml, and ruff preconfigured
-nix develop
 ```
-
-### Continuous Integration:
-Every pull request and push to `main` triggers [`.gitea/workflows/ci.yaml`](.gitea/workflows/ci.yaml), executing `nix flake check` to prevent architectural regressions.
 
 ---
 
-## 📦 Adding a New Application Stack
+## 📚 Repository Documentation Index
 
-Adding a new application to the homelab is completely decentralized:
-
-### 1. Create the App Directory
-```bash
-mkdir -p ~/Sites/homelab-myapp
-cd ~/Sites/homelab-myapp
-git init
-```
-
-### 2. Create `app.yaml` Manifest
-Define the application metadata:
-```yaml
-name: "myapp"
-aliases:
-  - "app"
-domain: "myapp.roadtotech.me"
-description: "My Awesome New Homelab App"
-visible: true
-auth: false
-networks:
-  - proxy-net
-env:
-  CUSTOM_VAR: "value"
-homepage:
-  title: "My App"
-  group: "Knowledge & Notes"
-  icon: "custom.png"
-  container: "myapp"
-  weight: 50
-```
-
-### 3. Create `docker-compose.yml`
-```yaml
-services:
-  myapp:
-    image: myapp/image:latest
-    container_name: ${CONTAINER_NAME:-myapp}
-    restart: unless-stopped
-    networks:
-      - proxy-net
-    labels:
-      - "traefik.enable=true"
-      # HTTPS Router
-      - "traefik.http.routers.${CONTAINER_NAME:-myapp}.rule=Host(`${SERVICE_DOMAIN}`)"
-      - "traefik.http.routers.${CONTAINER_NAME:-myapp}.entrypoints=websecure"
-      - "traefik.http.routers.${CONTAINER_NAME:-myapp}.tls=true"
-      - "traefik.http.routers.${CONTAINER_NAME:-myapp}.service=${CONTAINER_NAME:-myapp}-svc"
-      # HTTP to HTTPS Redirect
-      - "traefik.http.routers.${CONTAINER_NAME:-myapp}-red.rule=Host(`${SERVICE_DOMAIN}`)"
-      - "traefik.http.routers.${CONTAINER_NAME:-myapp}-red.entrypoints=web"
-      - "traefik.http.routers.${CONTAINER_NAME:-myapp}-red.middlewares=https-redirect@docker"
-      # Service Target Port
-      - "traefik.http.services.${CONTAINER_NAME:-myapp}-svc.loadbalancer.server.port=8080"
-
-networks:
-  proxy-net:
-    name: ${PROXY_NETWORK:-proxy-net}
-    external: true
-```
-
-### 4. Deploy and Sync
-```bash
-appctl up myapp
-```
-`appctl` will start the container, inject standard environment variables, and automatically recompile [`config/homepage/services.yaml`](config/homepage/services.yaml).
+| Document | Description |
+| :--- | :--- |
+| [**Architecture Guide**](docs/architecture.md) | Details system layers, component roles, network isolation, and security controls. |
+| [**Operator Runbook**](docs/operations.md) | Day-to-day administration, updates, maintenance, troubleshooting, and recovery procedures. |
+| [**Appctl Reference**](docs/appctl.md) | CLI command reference and consumed `app.yaml` manifest fields. |
+| [**GitOps Engine**](docs/gitops.md) | Webhook admission pipeline, HMAC authentication, lock serialization, and execution boundaries. |
+| [**Secrets & State**](docs/secrets-and-state.md) | SOPS encryption, runtime secret projections, user directory management, and persistent storage. |
+| [**Setup & Provisioning**](docs/setup_guide.md) | Procedures for provisioning a server host and onboarding workloads. |
+| [**Security Policy**](SECURITY.md) | Security controls, container isolation policies, and threat model. |
 
 ---
 
-## ❄️ Declarative NixOS Appliance
- 
-This repository is a self-contained NixOS appliance. It defines the operating system, Docker infrastructure, firewall rules, automated DDNS updates, and host shell environment in a single flake.
+## 🧠 Relationship to Brain Vault
 
-### Repository NixOS Layout:
-* **[`flake.nix`](flake.nix)** — Flake entrypoint defining `nixosConfigurations.server`.
-* **[`nixos/configuration.nix`](nixos/configuration.nix)** — Standalone headless host configuration (locale, SSH, Docker, packages).
-* **[`nixos/hardware-configuration.nix`](nixos/hardware-configuration.nix)** — Server hardware, disk mounts, and kernel parameters.
-* **[`nixos/secrets.yaml`](nixos/secrets.yaml)** — SOPS-encrypted secrets for the server.
-* **[`nixos/modules/homeserver.nix`](nixos/modules/homeserver.nix)** — `homeserver-core.service`, `homelab-gitops.service`, and Authelia secrets.
-* **[`nixos/modules/traefik-deployments.nix`](nixos/modules/traefik-deployments.nix)** — Traefik applications environment secrets (`traefik-deployments.env`).
-* **[`nixos/modules/dynu.nix`](nixos/modules/dynu.nix)** — Dynu DDNS smart IP monitor timer and ddclient credentials.
-* **[`nixos/modules/shell.nix`](nixos/modules/shell.nix)** — Server-tailored bash shell profile, aliases, and utilities.
-
-### Common Operations:
-```bash
-# Rebuild and switch the running system
-sudo nixos-rebuild switch --flake ~/Core#server
-# (or use the built-in alias: nix-switch)
-
-# Inspect core service units
-systemctl status homeserver-core
-journalctl -u homeserver-core -f
-
-# Inspect GitOps webhook dispatcher
-systemctl status homelab-gitops
-
-# Inspect dynamic IP monitor
-systemctl status dynu-monitor
-```
-
-### Disaster Recovery:
-Any clean machine can be provisioned into this server:
-```bash
-nixos-install --flake ~/Core#server
-```
+* **Repository Documentation (`~/Core/docs/`)**: Describes *what exists* and *how to operate it*. It serves as the operational manual for the current repository.
+* **Brain Vault (`~/Brain/projects/homelab/`)**: Captures *why it was built this way* — preserving architectural decision records (ADRs), historical trade-off discussions, active roadmaps, and deep debugging discoveries.
 
 ---
 
 ## 📄 License
+
 This repository is released into the public domain under [The Unlicense](UNLICENSE).
