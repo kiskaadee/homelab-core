@@ -48,6 +48,7 @@ def test_deprecated_legacy_structures_are_absent():
         "scripts/check-ssl.sh",
         "scripts/purge-dynu.sh",
         "scripts/ip-monitor.sh",
+        "docs/legacy",
     ]
 
     for p in prohibited_paths:

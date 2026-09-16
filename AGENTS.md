@@ -136,9 +136,6 @@ unless the architecture itself has intentionally changed.
 Use the repository's current architecture and operational documentation as the
 source of truth for ownership, protocols, and system behavior.
 
-Historical material under `docs/legacy/` is archival and must not be treated as
-current system behavior.
-
 Record significant architectural decisions in the appropriate ADR or Brain
 documentation rather than expanding this file into an architecture manual.
 
