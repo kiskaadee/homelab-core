@@ -18,6 +18,8 @@ config/authelia/users.yml
 config/authelia/users.yaml
 config/lldap/data/
 config/stalwart/data/
+config/stalwart/etc/*
+!config/stalwart/etc/.gitkeep
 config/snappymail/data/
 
 
