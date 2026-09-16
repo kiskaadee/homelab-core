@@ -327,6 +327,7 @@ def get_core_services():
         {"name": "authelia", "domain": "auth.roadtotech.me", "container": "authelia", "desc": "Identity & SSO Access Control"},
         {"name": "lldap", "domain": "users.roadtotech.me", "container": "lldap", "desc": "Lightweight LDAP User & Group Directory"},
         {"name": "stalwart", "domain": "mail.roadtotech.me", "container": "stalwart", "desc": "All-in-one Mail Server & JMAP/IMAP/SMTP"},
+        {"name": "snappymail", "domain": "webmail.roadtotech.me", "container": "snappymail", "desc": "Modern Lightweight Webmail Client"},
         {"name": "portainer", "domain": "portainer.roadtotech.me", "container": "portainer", "desc": "Container Management GUI"},
         {"name": "dozzle", "domain": "logs.roadtotech.me", "container": "dozzle", "desc": "Real-time Log Viewer"},
         {"name": "socket-proxy", "domain": "internal", "container": "socket-proxy", "desc": "Docker Socket Security Proxy"},
@@ -756,6 +757,8 @@ def cmd_sync_homepage(args):
         "traefik": {"title": "Traefik", "icon": "traefik.png", "weight": 10},
         "authelia": {"title": "Authelia", "icon": "authelia.png", "weight": 20},
         "lldap": {"title": "LLDAP Directory", "icon": "lldap.png", "weight": 25},
+        "stalwart": {"title": "Stalwart Mail", "icon": "email.png", "weight": 26},
+        "snappymail": {"title": "Webmail", "icon": "email.png", "weight": 27},
         "portainer": {"title": "Portainer", "icon": "portainer.png", "weight": 30},
         "dozzle": {"title": "Dozzle", "icon": "dozzle.png", "weight": 40},
     }

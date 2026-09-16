@@ -92,10 +92,11 @@
     };
   };
 
-  # Ensure persistent directories have proper permissions for container runtimes (e.g. Stalwart UID 2000)
+  # Ensure persistent directories have proper permissions for container runtimes (e.g. Stalwart UID 2000, SnappyMail)
   systemd.tmpfiles.rules = [
     "d /home/kiskaadee/Core/config/stalwart/data 0777 kiskaadee users -"
     "d /home/kiskaadee/Core/config/stalwart/etc 0777 kiskaadee users -"
+    "d /home/kiskaadee/Core/config/snappymail/data 0777 kiskaadee users -"
   ];
 
   # Open ports in the firewall for Traefik, Gitea SSH, GitOps Webhook Receiver, and Mail (SMTP, Submission, SMTPS, IMAPS, ManageSieve)

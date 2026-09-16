@@ -11,13 +11,14 @@ config/letsencrypt/*
 **/*.pem
 **/*.bak
 
-# Authelia, LLDAP & Stalwart Databases
+# Authelia, LLDAP, Stalwart & SnappyMail Data
 config/authelia/db.sqlite3
 config/authelia/emails.txt
 config/authelia/users.yml
 config/authelia/users.yaml
 config/lldap/data/
 config/stalwart/data/
+config/snappymail/data/
 
 
 # Diun Databases

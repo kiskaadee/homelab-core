@@ -277,6 +277,29 @@ services:
       # Forward to Stalwart's internal HTTP/WebAdmin port
       - "traefik.http.services.stalwart-svc.loadbalancer.server.port=8080"
 
+  snappymail:
+    image: ghcr.io/the-djmaze/snappymail:latest
+    container_name: snappymail
+    restart: always
+    depends_on:
+      - stalwart
+    volumes:
+      - ./config/snappymail/data:/snappymail/data
+    networks:
+      - proxy-net
+    labels:
+      - "traefik.enable=true"
+      # Public (HTTPS)
+      - "traefik.http.routers.webmail.rule=Host(`webmail.${DOMAIN}`)"
+      - "traefik.http.routers.webmail.entrypoints=websecure"
+      - "traefik.http.routers.webmail.tls=true"
+      - "traefik.http.routers.webmail.tls.certresolver=myresolver"
+      - "traefik.http.routers.webmail.service=webmail-svc"
+      # Public (Redirect)
+      - "traefik.http.routers.webmail-red.rule=Host(`webmail.${DOMAIN}`)"
+      - "traefik.http.routers.webmail-red.entrypoints=web"
+      - "traefik.http.routers.webmail-red.middlewares=https-redirect@docker"
+      - "traefik.http.services.webmail-svc.loadbalancer.server.port=8888"
 
   homepage:
     image: ghcr.io/gethomepage/homepage:latest
