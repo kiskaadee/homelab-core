@@ -152,3 +152,24 @@ cat ~/.local/state/homelab/gitops/homelab-docs.status.json
 # Trigger a local manual deployment run
 python3 ~/Core/scripts/gitops_dispatcher.py --repo docs --branch main
 ```
+
+---
+
+## 6. Pre-Merge CI Gating vs. Post-Merge CD Dispatcher
+
+The continuous deployment engine operates strictly **downstream** of CI verification:
+
+```
+[Developer / PR] ──► [Gitea Actions CI] ──► [Merge to main] ──► [Gitea Webhook] ──► [homelab-gitops] ──► [Deploy]
+                     (Ephemeral Container)                                           (Host Daemon)
+```
+
+1. **Pre-Merge CI Invariant (`.gitea/workflows/ci.yaml`)**:
+   - Executes inside containerized `act_runner` environments using **pre-baked toolchain images** (`container: nixos/nix:latest`).
+   - Runs hermetic validation (`nix flake check`, `pytest`, `ruff`) with Git safe directory enforcement.
+   - Prevents broken code, misconfigured flakes, or regression bugs from entering `main`.
+2. **Post-Merge CD Execution (`homelab-gitops.service`)**:
+   - Triggers only after commits are admitted into `main`.
+   - Executes non-shell allowlisted actions (`git_pull`, `compose_up`) on the server host.
+   - Operates fully decoupled from the CI runner runtime.
+
