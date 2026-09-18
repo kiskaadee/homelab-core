@@ -9,12 +9,17 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    container:
+      image: nixos/nix:latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+      - name: Configure Git Safe Directory & Nix Flakes
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          mkdir -p ~/.config/nix
+          echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
 
       - name: Run Architecture & Security Invariant Checks
         run: |
