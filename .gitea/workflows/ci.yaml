@@ -10,7 +10,7 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     container:
-      image: nixos/nix:latest
+      image: nixery.dev/shell/coreutils/git/nix:latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -20,6 +20,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           mkdir -p ~/.config/nix
           echo "experimental-features = nix-command flakes" >> ~/.config/nix/nix.conf
+          echo "build-users-group =" >> ~/.config/nix/nix.conf
 
       - name: Run Architecture & Security Invariant Checks
         run: |
