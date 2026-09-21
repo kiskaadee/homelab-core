@@ -1,5 +1,7 @@
 import os
+import sys
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -16,7 +18,28 @@ SITES_DIR = os.environ.get(
     else os.path.expanduser("~/Sites"),
 )
 
-HOMELAB_DOMAIN = os.environ.get("HOMELAB_DOMAIN", "roadtotech.me")
+
+HOMELAB_DOMAIN = os.environ.get("HOMELAB_DOMAIN") or os.environ.get("DOMAIN", "")
+
+
+def validate_environment() -> None:
+    """Ensure mandatory environment configuration is valid before CLI execution."""
+    errors: list[str] = []
+
+    if not HOMELAB_DOMAIN:
+        errors.append(
+            "• Missing 'HOMELAB_DOMAIN' (or 'DOMAIN') environment variable.\n"
+            "  Please export it (e.g. export HOMELAB_DOMAIN='roadtotech.me') or set it in your environment file."
+        )
+
+    if not os.path.isdir(CORE_DIR):
+        errors.append(f"• Core directory not found at: {CORE_DIR}")
+
+    if errors:
+        print("❌ Environment Validation Failed:\n", file=sys.stderr)
+        for err in errors:
+            print(f"  {err}", file=sys.stderr)
+        sys.exit(1)
 
 class ManifestError(Exception):
     pass
@@ -315,3 +338,16 @@ def get_core_services(core_dir: str | None = None) -> list[CoreService]:
             description="Automated Container Updates",
         ),
     ]
+
+
+def get_docker_status(
+    dir_path: str | Path,
+    container_name: str | None = None
+) -> str:
+    path: Path = Path(dir_path)
+    def _do_something(path: Path = path):
+        return ""
+    return _do_something()
+
+def cmd_sync_homepage(args) -> None:
+    pass
