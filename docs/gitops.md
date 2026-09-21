@@ -165,7 +165,7 @@ The continuous deployment engine operates strictly **downstream** of CI verifica
 ```
 
 1. **Pre-Merge CI Invariant (`.gitea/workflows/ci.yaml`)**:
-   - Executes inside containerized `act_runner` environments using **pre-baked toolchain images** (`container: nixery.dev/shell/coreutils/git/nix:latest`).
+   - Executes inside containerized `act_runner` environments using **pre-baked toolchain images** (`container: nixery.dev/shell/coreutils/git/nix/nodejs:latest`).
    - Runs hermetic validation (`nix flake check`, `pytest`, `ruff`) with Git safe directory enforcement.
    - Prevents broken code, misconfigured flakes, or regression bugs from entering `main`.
 2. **Post-Merge CD Execution (`homelab-gitops.service`)**:
