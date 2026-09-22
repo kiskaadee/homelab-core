@@ -244,8 +244,8 @@ services:
       - DIUN_NOTIF_MAIL_PORT=25
       - DIUN_NOTIF_MAIL_SSL=false
       - DIUN_NOTIF_MAIL_INSECURESKIPVERIFY=true
-      - DIUN_NOTIF_MAIL_FROM=diun@${DOMAIN}
-      - DIUN_NOTIF_MAIL_TO=kiskaadee@${DOMAIN}
+      - DIUN_NOTIF_MAIL_FROM=diun@${DOMAIN:-roadtotech.me}
+      - DIUN_NOTIF_MAIL_TO=kiskaadee@${DOMAIN:-roadtotech.me}
     volumes:
       - ./config/diun:/data
     networks:
