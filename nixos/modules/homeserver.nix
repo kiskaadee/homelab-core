@@ -79,7 +79,7 @@
           id = "deploy";
           execute-command = "/home/kiskaadee/Core/scripts/gitops_dispatcher.py";
           pass-arguments-to-command = [
-            { source = "entire-payload"; }
+            { source = "raw-request-body"; }
             { source = "header"; name = "X-Gitea-Signature"; }
             { source = "header"; name = "X-Gitea-Event"; }
           ];
