@@ -227,6 +227,8 @@ services:
     container_name: diun
     restart: always
     command: serve
+    depends_on:
+      - socket-proxy
     environment:
       - TZ=UTC
       - LOG_LEVEL=info
@@ -235,7 +237,8 @@ services:
       - DIUN_WATCH_SCHEDULE=0 */6 * * *
       - DIUN_PROVIDERS_DOCKER=true
       - DIUN_PROVIDERS_DOCKER_ENDPOINT=tcp://socket-proxy:2375
-      - DOCKER_API_VERSION=${DOCKER_API_VERSION:-1.40}
+      - DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT=true
+      - DIUN_PROVIDERS_DOCKER_APIVERSION=${DOCKER_API_VERSION:-1.40}
     volumes:
       - ./config/diun:/data
     networks:
