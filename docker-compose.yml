@@ -165,7 +165,10 @@ services:
     image: portainer/portainer-ce:latest
     container_name: portainer
     restart: always
-    command: -H tcp://socket-proxy:2375
+    command: >
+      -H tcp://socket-proxy:2375
+      --admin-password=${PORTAINER_ADMIN_PASSWORD}
+      --no-analytics
     volumes:
       - portainer_data:/data
     networks:
