@@ -115,6 +115,6 @@ Homelab Core separates **user identity** from **static platform secrets**:
 | **Auth Database** | `~/Core/config/authelia/db.sqlite3` | ❌ No | Authelia session database |
 | **Mail Data & Keys** | `~/Core/config/stalwart/` | ❌ No | Stalwart mail storage, DKIM keys, mailboxes |
 | **Webmail Storage** | `~/Core/config/snappymail/data/` | ❌ No | SnappyMail configuration and sessions |
-| **Container Volumes** | Docker volume `portainer_data` | ❌ No | Portainer internal metadata |
+| **Container Volumes** | Docker volume `dozzle_data` | ❌ No | Dozzle UI preferences and state |
 | **DDNS History** | `/var/lib/dynu/ip_history.jsonl` | ❌ No | Historical WAN IP transitions log |
 | **GitOps State** | `~/.local/state/homelab/gitops/` | ❌ No | Deployment locks, pending JSONs, status logs |

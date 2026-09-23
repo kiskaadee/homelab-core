@@ -51,7 +51,7 @@ docker system prune -a --volumes --filter "until=168h"
 Homelab Core runs several platform services managed by systemd:
 
 ### `homeserver-core.service` (Core Compose Stack)
-Manages the lifecycle of Traefik, Authelia, LLDAP, Stalwart, SnappyMail, Homepage, Portainer, Dozzle, Watchtower, and Diun.
+Manages the lifecycle of Traefik, Authelia, LLDAP, Stalwart, SnappyMail, Homepage, Dozzle, Watchtower, and Diun.
 
 ```bash
 # Check service status
@@ -211,7 +211,7 @@ User accounts and group memberships are managed dynamically in **LLDAP** rather 
   ```
 
 ### C. Docker Socket Communication Errors
-* **Symptom**: Traefik fails to discover routers, or Dozzle/Portainer shows "Cannot connect to Docker daemon".
+* **Symptom**: Traefik fails to discover routers, or Dozzle shows "Cannot connect to Docker daemon".
 * **Diagnosis**:
   ```bash
   # Verify socket-proxy is running and healthy

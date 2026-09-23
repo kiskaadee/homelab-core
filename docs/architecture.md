@@ -25,7 +25,7 @@ The runtime environment consists of four functional layers:
 ┌────────────────────────────────────────────────────────────────────────┐
 │ 2. CONTROL & PLATFORM SERVICES (Core Compose Stack)                   │
 │    Authelia SSO · LLDAP Directory · Stalwart Mail · SnappyMail         │
-│    Homepage Dashboard · Portainer · Dozzle · Watchtower · Diun         │
+│    Homepage Dashboard · Dozzle · Watchtower · Diun                     │
 │    socket-proxy (Read-Only Docker API Barrier)                         │
 └───────────────────────────────────┬────────────────────────────────────┘
                                     │
@@ -81,9 +81,8 @@ Orchestration coordinates operations across the runtime layers without being a r
   - Outbound mail relay configured to route through an external smart host (Brevo SMTP relay via SOPS secrets).
 * **`snappymail`**: Webmail client accessible at `webmail.roadtotech.me` routing to Stalwart.
 
-### E. Portal & Observability (`homepage`, `portainer`, `dozzle`)
+### E. Portal & Observability (`homepage`, `dozzle`)
 * **`homepage`**: Service dashboard at `dashboard.roadtotech.me`. Synchronized from `app.yaml` manifests in `~/Sites` by `appctl sync`.
-* **`portainer`**: Container management interface at `portainer.roadtotech.me`, connecting to Docker through `socket-proxy`.
 * **`dozzle`**: Log viewing interface at `logs.roadtotech.me`, connecting through `socket-proxy`.
 
 ### F. Host Foundation & Daemons
@@ -108,7 +107,7 @@ Homelab Core configures two bridge networks:
 │   │  • traefik (router)              • authelia (sso)            │     │
 │   │  • lldap (directory)             • stalwart (mail)           │     │
 │   │  • snappymail (webmail)          • homepage (dashboard)      │     │
-│   │  • portainer (management)        • dozzle (logs)             │     │
+│   │  • dozzle (logs)                                             │     │
 │   │  • All User Workloads (~/Sites/*)                            │     │
 │   └──────────────────────────────┬───────────────────────────────┘     │
 │                                  │                                     │
@@ -116,9 +115,8 @@ Homelab Core configures two bridge networks:
 │   │                      socket-net (Bridge)                     │     │
 │   │                                                              │     │
 │   │  • socket-proxy (HAProxy :2375)  • traefik                   │     │
-│   │  • portainer                     • dozzle                    │     │
-│   │  • watchtower                    • diun                      │     │
-│   │  • homepage                                                  │     │
+│   │  • dozzle                        • watchtower                │     │
+│   │  • diun                          • homepage                  │     │
 │   └──────────────────────────────┬───────────────────────────────┘     │
 │                                  │ (ro mount)                          │
 │                                  ▼                                     │

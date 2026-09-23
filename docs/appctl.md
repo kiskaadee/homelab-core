@@ -206,7 +206,7 @@ When `appctl` executes commands against a workload, environment variables are re
 
 When `appctl sync` runs:
 1. `appctl_engine.py` reads all `~/Sites/*/app.yaml` files.
-2. Core services (`traefik`, `authelia`, `lldap`, `stalwart`, `snappymail`, `portainer`, `dozzle`) are assigned to `Core Infrastructure`.
+2. Core services (`traefik`, `authelia`, `lldap`, `stalwart`, `snappymail`, `dozzle`) are assigned to `Core Infrastructure`.
 3. Workload applications with `visible: true` are grouped by their `homepage.group` (ordered: `Core Infrastructure`, `Knowledge & Notes`, `Media & Productivity`, `Development & AI`, `Applications`).
 4. Custom icons matching files in `config/homepage/icons/` (SVG or PNG) are mapped to `/icons/<name>`.
 5. The compiled configuration is written to `config/homepage/services.yaml`.

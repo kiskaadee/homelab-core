@@ -64,3 +64,16 @@ def test_no_shell_true_in_core_scripts():
     for py_file in scripts_dir.glob("*.py"):
         content = py_file.read_text(encoding="utf-8")
         assert "shell=True" not in content, f"shell=True detected in {py_file.name}!"
+
+
+def test_portainer_is_deprecated_and_absent():
+    """Ensure portainer service and volume are completely absent from core docker-compose."""
+    compose_path = CORE_ROOT / "docker-compose.yml"
+    with open(compose_path, encoding="utf-8") as f:
+        compose = yaml.safe_load(f)
+
+    services = compose.get("services", {})
+    assert "portainer" not in services, "Deprecated service 'portainer' must not exist in docker-compose.yml"
+
+    volumes = compose.get("volumes", {}) or {}
+    assert "portainer_data" not in volumes, "Deprecated volume 'portainer_data' must not exist in docker-compose.yml"

@@ -18,7 +18,7 @@ The homelab ecosystem separates **ownership**, **runtime architecture**, and **c
 The system operates across four runtime layers:
 1. **Host Foundation**: Headless NixOS Linux, disk configuration, Docker daemon, systemd daemons, firewall rules, and in-memory secret files under `/run/secrets/`.
 2. **Edge Gateway**: Traefik (v3.6) reverse proxy terminating wildcard TLS (`*.roadtotech.me`) via Dynu DNS-01 Let's Encrypt validation.
-3. **Core Platform Services**: Central services in `docker-compose.yml` (Authelia SSO, LLDAP directory, Stalwart mail, SnappyMail, Homepage dashboard, Portainer, Dozzle, Watchtower, Diun, and socket-proxy).
+3. **Core Platform Services**: Central services in `docker-compose.yml` (Authelia SSO, LLDAP directory, Stalwart mail, SnappyMail, Homepage dashboard, Dozzle, Watchtower, Diun, and socket-proxy).
 4. **Workload Plane**: Independent application stacks in `~/Sites` connected to the platform over the `proxy-net` Docker network.
 
 ### 3. Cross-Cutting Orchestration
@@ -49,7 +49,7 @@ The system operates across four runtime layers:
                     │      Docker proxy-net         │
                     ├───────────────────────────────┤
                     │ • Core Services (Homepage,    │
-                    │   Portainer, Dozzle, etc.)    │
+                    │   Dozzle, etc.)               │
                     │ • Workload Apps (~/Sites/*)   │
                     └───────────────────────────────┘
                                     │
@@ -74,7 +74,6 @@ The system operates across four runtime layers:
 | **`stalwart`** | `mail.roadtotech.me` | Mail Server (SMTP/IMAP/JMAP/Sieve) | Native / LLDAP |
 | **`snappymail`** | `webmail.roadtotech.me` | Webmail client connected to Stalwart | Native / Stalwart |
 | **`homepage`** | `dashboard.roadtotech.me` | Service portal & system dashboard | Authelia Guard |
-| **`portainer`** | `portainer.roadtotech.me` | Container management GUI (via socket-proxy) | Authelia Guard |
 | **`dozzle`** | `logs.roadtotech.me` | Container log viewer (via socket-proxy) | Authelia Guard |
 | **`watchtower`** | Internal | Automated container image updater | Internal Only |
 | **`diun`** | Internal | Container image update notifier | Internal Only |

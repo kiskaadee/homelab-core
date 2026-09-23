@@ -10,7 +10,7 @@ This document outlines the security controls, container isolation rules, and ope
 * Direct container mounts of `/var/run/docker.sock` are restricted.
 * Only the dedicated `socket-proxy` container mounts `/var/run/docker.sock:ro`.
 * State-modifying and execution API endpoints are disabled in HAProxy (`POST=0`, `DELETE=0`, `BUILD=0`, `EXEC=0`, `COMMIT=0`, `CONFIGS=0`, `DISTRIBUTION=0`, `NODES=0`, `PLUGINS=0`, `SECRETS=0`, `SWARM=0`, `SYSTEM=0`).
-* Traefik, Portainer, and Dozzle query Docker metrics and metadata via `tcp://socket-proxy:2375` rather than direct socket mounts.
+* Traefik and Dozzle query Docker metrics and metadata via `tcp://socket-proxy:2375` rather than direct socket mounts.
 
 ### B. Identity & Access Management (`lldap` & `authelia`)
 * **Directory Service**: User accounts and group memberships are stored in LLDAP (`users.roadtotech.me`).
