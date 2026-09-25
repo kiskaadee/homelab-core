@@ -17,6 +17,7 @@
     "gitops/webhook_secret"
     "brevo/smtp_login"
     "brevo/smtp_key"
+    "diun/smtp_password"
   ] (name: { owner = "kiskaadee"; });
 
   # Generate the unified environment file at runtime in /run/secrets/homeserver.env
@@ -38,6 +39,7 @@
       SMTP_PORT = "587";
       SMTP_LOGIN = config.sops.placeholder."brevo/smtp_login";
       SMTP_KEY = config.sops.placeholder."brevo/smtp_key";
+      DIUN_SMTP_PASSWORD = config.sops.placeholder."diun/smtp_password";
     };
   };
 
