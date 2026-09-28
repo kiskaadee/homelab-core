@@ -144,16 +144,15 @@ and the live documentation viewer.
 
 ---
 
-## Brain Vault
+## Engineering Knowledge Capture
 
-Capture significant:
+Significant engineering knowledge should be externalized to the project's external knowledge base when such a system is configured:
 
-- Architectural decisions
-- Security/threat-model changes
-- Debugging discoveries
-- Implementation lessons
+- Architectural decisions with lasting trade-offs
+- Threat model or security posture modifications
+- Non-obvious root cause discoveries and diagnostic breakthroughs
+- Transferable implementation lessons
 
-in the appropriate `/home/kiskaadee/Brain/homelab/` or
-`/home/kiskaadee/Brain/learning/` location.
-
-Do not duplicate entire repository documentation in the Brain Vault.
+Guidelines:
+- Do not duplicate repository documentation, runtime configs, or appliance manuals in external records.
+- Preserve repository-local documentation (e.g., `docs/`, inline comments, commit rationale) as the primary source of truth for runtime behavior.
