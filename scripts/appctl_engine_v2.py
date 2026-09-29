@@ -53,6 +53,13 @@ class HomepageConfig:
     weight: int = 50
 
 @dataclass
+class SourceConfig:
+    """Upstream source provenance descriptor."""
+    type: str = "git"              # "git"
+    url: str = ""                  # e.g., "https://git.roadtotech.me/kiskaadee/bitetrack.git"
+    ref: str = "main"              # Branch (e.g. "main"), tag (e.g. "v1.0.0"), or commit SHA
+
+@dataclass
 class App:
     name: str                       # Canonical identified (e.g., "traefik", "jellyfin")
     description: str                # Human-readable summary for dashboards and CLI info
@@ -81,6 +88,7 @@ class CoreService(App):
 @dataclass
 class SitesApp(App):
     dir_name: str = ""              # directory name in ~/Sites (e.g., "homelab-vaultwarden")
+    source: SourceConfig | None = None  # Upstream source provenance (optional; None indicates Image-Only workload)
     aliases: list[str] = field(default_factory=list)    # CLI resolution aliases (e.g., "vw", "vaultwarden")
     visible: bool = True            # Defines whether the icon is visible in the Homepage Dashboard
     auth: bool = True               # Authelia protection guard indicator; Defaulting to True is safer
@@ -175,9 +183,27 @@ def sites_app_from_manifest(
     app_vis = _as_bool(manifest.get("visible"), True)
     app_auth = _as_bool(manifest.get("auth"), True)
 
+    # Source provenance normalization
+    source_config: SourceConfig | None = None
+    raw_source = manifest.get("source")
+    if isinstance(raw_source, dict):
+        source_url = str(raw_source.get("url") or "")
+        allowed_schemes = ("https://", "ssh://", "git@")
+        if source_url:
+            if not any(source_url.startswith(s) for s in allowed_schemes):
+                err = f"Invalid source.url scheme: must start with {', '.join(allowed_schemes)}"
+                manifest_error = f"{manifest_error}; {err}" if manifest_error else err
+            else:
+                source_config = SourceConfig(
+                    type=str(raw_source.get("type") or "git"),
+                    url=source_url,
+                    ref=str(raw_source.get("ref") or "main"),
+                )
+
     return SitesApp(
         name=canonical_name,
         dir_name=raw_dir_name,
+        source=source_config,
         description=app_desc,
         domain=app_dom,
         dir_path=app_dir,
@@ -187,7 +213,7 @@ def sites_app_from_manifest(
         auth=app_auth,
         networks=app_net,
         env=app_env,
-        homepage= homepage_config,
+        homepage=homepage_config,
         manifest_error=manifest_error,
     )
 

@@ -120,6 +120,73 @@ def test_sites_app_normalization(app_factory: AppFactory):
     assert app.homepage.weight == 99
 
 
+def test_sites_app_source_provenance_normalization(app_factory: AppFactory):
+    """Ensure source provenance block is correctly parsed into SourceConfig"""
+    # 1. Source-backed app with explicit ref
+    app_factory.create(
+        dir_name="homelab-bitetrack",
+        manifest_yaml="""
+        name: bitetrack
+        source:
+            type: git
+            url: https://git.roadtotech.me/kiskaadee/bitetrack.git
+            ref: v1.2.0
+        """
+    )
+    # 2. Source-backed app with default ref (main)
+    app_factory.create(
+        dir_name="homelab-doc2site",
+        manifest_yaml="""
+        name: doc2site
+        source:
+            url: https://git.roadtotech.me/kiskaadee/doc2site.git
+        """
+    )
+    # 3. Image-only app (no source block)
+    app_factory.create(
+        dir_name="homelab-jellyfin",
+        manifest_yaml="""
+        name: jellyfin
+        """
+    )
+
+    apps = engine.get_sites_apps()
+
+    bitetrack = engine.resolve_app("bitetrack", apps)
+    assert bitetrack is not None
+    assert bitetrack.source is not None
+    assert bitetrack.source.type == "git"
+    assert bitetrack.source.url == "https://git.roadtotech.me/kiskaadee/bitetrack.git"
+    assert bitetrack.source.ref == "v1.2.0"
+    assert bitetrack.to_dict()["source"]["ref"] == "v1.2.0"
+
+    doc2site = engine.resolve_app("doc2site", apps)
+    assert doc2site is not None
+    assert doc2site.source is not None
+    assert doc2site.source.ref == "main"
+
+    jellyfin = engine.resolve_app("jellyfin", apps)
+    assert jellyfin is not None
+    assert jellyfin.source is None
+    assert jellyfin.to_dict()["source"] is None
+
+    # 4. App with illegal source transport (e.g. file://)
+    app_factory.create(
+        dir_name="homelab-malformed",
+        manifest_yaml="""
+        name: malformed
+        source:
+            url: file:///etc/passwd
+        """
+    )
+    apps_updated = engine.get_sites_apps()
+    malformed = engine.resolve_app("malformed", apps_updated)
+    assert malformed is not None
+    assert malformed.source is None
+    assert malformed.manifest_error is not None
+    assert "Invalid source.url scheme" in malformed.manifest_error
+
+
 ## RED TESTS: TDD Goals for next implementation
 
 @pytest.mark.xfail(reason="TDD in progress: get_docker_status not yet implemented")
