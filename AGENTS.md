@@ -144,15 +144,12 @@ and the live documentation viewer.
 
 ---
 
-## Engineering Knowledge Capture
+## Architectural & Engineering Knowledge Preservation
 
-Significant engineering knowledge should be externalized to the project's external knowledge base when such a system is configured:
-
-- Architectural decisions with lasting trade-offs
-- Threat model or security posture modifications
-- Non-obvious root cause discoveries and diagnostic breakthroughs
-- Transferable implementation lessons
-
-Guidelines:
-- Do not duplicate repository documentation, runtime configs, or appliance manuals in external records.
-- Preserve repository-local documentation (e.g., `docs/`, inline comments, commit rationale) as the primary source of truth for runtime behavior.
+When engineering changes in Core yield durable architectural insights, security posture shifts, non-obvious root causes, or transferable operational heuristics, knowledge preservation is governed by the global skill **`documentation-router`**:
+- Architectural commitments are recorded in ADRs (`03-records/decisions/`).
+- Exploratory design inquiries and trade-offs are recorded in Discussions (`02-discussions/`).
+- Empirical incident RCAs are recorded in Debug Records (`03-records/debug/`).
+- Implementation roadmaps are recorded in Plans (`01-plans/`).
+- Routine maintenance, configuration adjustments, and self-explanatory fixes require no external documentation.
+- Preserve repository-local documentation (`docs/`, inline comments, commit rationale) as the primary source of truth for runtime behavior.
