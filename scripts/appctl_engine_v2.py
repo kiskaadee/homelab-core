@@ -313,14 +313,7 @@ def get_core_services(core_dir: str | None = None) -> list[CoreService]:
             icon="email.png",
             weight=26,
         ),
-        CoreService(
-            name="snappymail",
-            domain=f"webmail.{HOMELAB_DOMAIN}",
-            container="snappymail",
-            description="Modern Lightweight Webmail Client",
-            icon="email.png",
-            weight=27,
-        ),
+
         CoreService(
             name="portainer",
             domain=f"portainer.{HOMELAB_DOMAIN}",
