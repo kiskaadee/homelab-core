@@ -722,6 +722,7 @@ def main():
             sys.exit(0 if "Branch mismatch" in reason else 1)
 
         logger.info(f"✅ Webhook admission passed: {reason}")
+        assert target_dir is not None, "admitted deployment must have a valid target directory"
         commit_sha = payload.get("after", "")
         if not commit_sha and isinstance(payload.get("head_commit"), dict):
             commit_sha = payload.get("head_commit", {}).get("id", "")
