@@ -189,15 +189,9 @@ def test_sites_app_source_provenance_normalization(app_factory: AppFactory):
 
 ## RED TESTS: TDD Goals for next implementation
 
-@pytest.mark.xfail(reason="TDD in progress: get_docker_status not yet implemented")
 def test_docker_status_parser_running(monkeypatch):
-    """
-    TDD Goal: Port `get_docker_status` to V2
-    It must shell out to `docker-compse ps` and `docker inspect`
-    then return the correct UI badge
-    """
+    """Ensure get_docker_status reports running compose stack when all containers are running."""
     def mock_run(args, **kwargs):
-        """Mocking a running"""
         mock = MagicMock()
         if "ps" in args:
             mock.stdout = "container123\n"
@@ -209,6 +203,93 @@ def test_docker_status_parser_running(monkeypatch):
 
     status = engine.get_docker_status("/fake/dir")
     assert status == "🟢 Running (1)"
+
+
+def test_docker_status_parser_stopped(monkeypatch):
+    """Ensure get_docker_status reports stopped when no containers exist."""
+    def mock_run(args, **kwargs):
+        mock = MagicMock()
+        if "ps" in args:
+            mock.stdout = ""
+        return mock
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    status = engine.get_docker_status("/fake/dir")
+    assert status == "🔴 Stopped"
+
+
+def test_docker_status_parser_degraded(monkeypatch):
+    """Ensure get_docker_status reports degraded when partial containers are running."""
+    def mock_run(args, **kwargs):
+        mock = MagicMock()
+        if "ps" in args:
+            mock.stdout = "c1\nc2\n"
+        if "inspect" in args:
+            mock.stdout = "true\nfalse\n"
+        return mock
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    status = engine.get_docker_status("/fake/dir")
+    assert status == "🟡 Degraded (1/2)"
+
+
+def test_docker_status_parser_not_stack(tmp_path: Path):
+    """Ensure get_docker_status reports Not Stack for real directory without compose file."""
+    empty_dir = tmp_path / "empty_service"
+    empty_dir.mkdir()
+    assert engine.get_docker_status(empty_dir) == "⚪ Not Stack"
+
+
+def test_docker_status_single_container(monkeypatch):
+    """Ensure get_docker_status inspects single Core container by name."""
+    def mock_run(args, **kwargs):
+        mock = MagicMock()
+        if "authelia" in args:
+            mock.stdout = "true\n"
+        else:
+            mock.stdout = "false\n"
+        return mock
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    assert engine.get_docker_status("", container_name="authelia") == "🟢 Running (1)"
+    assert engine.get_docker_status("", container_name="traefik") == "🔴 Stopped"
+
+
+def test_docker_status_error_handling(monkeypatch):
+    """Ensure get_docker_status handles subprocess failures gracefully."""
+    def mock_err(*args, **kwargs):
+        raise OSError("Docker socket unreachable")
+
+    monkeypatch.setattr("subprocess.run", mock_err)
+    assert engine.get_docker_status("/fake/dir") == "❓ Unknown"
+
+
+def test_docker_image_revision_extraction(monkeypatch):
+    """Ensure get_docker_image_revision extracts org.opencontainers.image.revision."""
+    def mock_run(args, **kwargs):
+        mock = MagicMock()
+        if "ps" in args:
+            mock.stdout = "container123\n"
+        if "inspect" in args:
+            mock.stdout = "9d82577f489f0d478e465a36077538d0ded16ba5\n"
+        return mock
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    assert engine.get_docker_image_revision("/fake/dir") == "9d82577f489f0d478e465a36077538d0ded16ba5"
+
+    def mock_run_empty(args, **kwargs):
+        mock = MagicMock()
+        if "ps" in args:
+            mock.stdout = "container123\n"
+        if "inspect" in args:
+            mock.stdout = "<no value>\n"
+        return mock
+
+    monkeypatch.setattr("subprocess.run", mock_run_empty)
+    assert engine.get_docker_image_revision("/fake/dir") is None
 
 @pytest.mark.xfail(reason="TDD in progress: cmd_sync_homepage not yet implemented")
 def test_homepage_sync_groups_and_sorts_correctly(

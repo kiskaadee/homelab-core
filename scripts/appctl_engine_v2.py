@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -361,12 +362,97 @@ def get_core_services(core_dir: str | None = None) -> list[CoreService]:
 
 def get_docker_status(
     dir_path: str | Path,
-    container_name: str | None = None
+    container_name: str | None = None,
 ) -> str:
-    path: Path = Path(dir_path)
-    def _do_something(path: Path = path):
-        return ""
-    return _do_something()
+    """Get container running status for a docker-compose directory or single Core container."""
+    try:
+        if container_name:
+            inspect_res = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            state = inspect_res.stdout.strip()
+            if state.lower() == "true":
+                return "🟢 Running (1)"
+            return "🔴 Stopped"
+
+        path = Path(dir_path)
+        if path.exists() and not (path / "docker-compose.yml").is_file() and not (path / "docker-compose.yaml").is_file():
+            return "⚪ Not Stack"
+
+        res = subprocess.run(
+            ["docker", "compose", "ps", "-q"],
+            cwd=str(path),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        container_ids = [c for c in res.stdout.strip().splitlines() if c]
+        if not container_ids:
+            return "🔴 Stopped"
+
+        inspect_res = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}"] + container_ids,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        running_states = inspect_res.stdout.strip().splitlines()
+        running_count = sum(1 for s in running_states if s.lower() == "true")
+        total_count = len(container_ids)
+
+        if running_count == total_count and total_count > 0:
+            return f"🟢 Running ({running_count})"
+        elif running_count > 0:
+            return f"🟡 Degraded ({running_count}/{total_count})"
+        else:
+            return "🔴 Stopped"
+    except (subprocess.SubprocessError, OSError):
+        return "❓ Unknown"
+
+
+def get_docker_image_revision(
+    dir_path: str | Path | None = None,
+    container_name: str | None = None,
+) -> str | None:
+    """Extract `org.opencontainers.image.revision` label from running container."""
+    try:
+        target: str | None = container_name
+        if not target and dir_path:
+            res = subprocess.run(
+                ["docker", "compose", "ps", "-q"],
+                cwd=str(dir_path),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            ids = [c for c in res.stdout.strip().splitlines() if c]
+            if ids:
+                target = ids[0]
+
+        if not target:
+            return None
+
+        inspect_res = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                '{{ index .Config.Labels "org.opencontainers.image.revision" }}',
+                target,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        revision = inspect_res.stdout.strip()
+        if revision and revision != "<no value>":
+            return revision
+        return None
+    except (subprocess.SubprocessError, OSError):
+        return None
 
 def cmd_sync_homepage(args) -> None:
     pass
