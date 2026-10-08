@@ -3,6 +3,8 @@
 .env.*
 secrets.txt
 backup.zip
+.envrc
+.direnv
 
 # SSL / ACME Certificates & Keys
 config/letsencrypt/*
@@ -47,4 +49,3 @@ __pycache__/
 # Local Bootstrap & Operational Scripts
 scripts/bootstrap_lldap_users.py
 scripts/bootstrap_*.py
-

@@ -1,0 +1,5 @@
+[tool.pyright]
+extraPaths = ["scripts"]
+exclude = [
+    "scripts/appctl_engine.py",
+]

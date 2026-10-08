@@ -27,9 +27,12 @@
 
     devShells.${system}.default = pkgs.mkShell {
       buildInputs = with pkgs; [
-        python3
-        python3Packages.pytest
-        python3Packages.pyyaml
+        (python3.withPackages (ps: with ps; [
+          pyyaml
+          types-pyyaml
+          pytest
+        ]))
+        pyright
         ruff
       ];
       shellHook = ''
