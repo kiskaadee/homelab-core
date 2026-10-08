@@ -2,6 +2,10 @@
 
 This document details the architectural structure, component roles, networking models, and security controls of the **Homelab Core** platform for `roadtotech.me`.
 
+> [!NOTE]
+> **Implementation Scope**: This document details the **current runtime architecture**, edge routing, container topologies, and network isolation models of Homelab Core.
+> For the overarching control-plane architecture, 5-stage deployment model lifecycle, and phased engineering milestones, see [`README.md`](../README.md), [`ROADMAP.md`](../ROADMAP.md), and the [Architecture Decision Index](decisions/README.md).
+
 ---
 
 ## 1. System Structure: Ownership vs. Runtime Layers vs. Orchestration
@@ -46,7 +50,7 @@ The runtime environment consists of four functional layers:
 
 ### C. Cross-Cutting Orchestration
 Orchestration coordinates operations across the runtime layers without being a runtime layer itself:
-* **`appctl` CLI & Metadata Engine (`scripts/appctl`, `scripts/appctl_engine.py`)**: Slices across the Host Foundation (sourcing secrets from `/run/secrets/`), Workload Plane (parsing `~/Sites/*/app.yaml` and driving Docker Compose), and Platform Services (recompiling `config/homepage/services.yaml`).
+* **`appctl` CLI & Metadata Engine (`scripts/appctl`, `scripts/appctl_engine.py`, `scripts/appctl_engine_v2.py`)**: Current CLI implementation coordinating discovery, Docker status inspection, and Homepage compilation across workloads and Core. In the target architecture, this evolves into the centralized operational control plane daemon (`homelab-appctl.service`).
 * **GitOps Webhook Dispatcher (`scripts/gitops_dispatcher.py`)**: Governed by the `homelab-gitops.service` systemd unit, it receives webhooks on port 9000, enforces admission policies, and dispatches serialized deployment actions for workloads or data repositories.
 
 ---

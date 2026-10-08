@@ -2,6 +2,10 @@
 
 The `appctl` tool is the command-line orchestrator and metadata engine for the **Homelab Core** platform. It coordinates interactions between independent workload repositories in `~/Sites` and platform services in `~/Core`.
 
+> [!NOTE]
+> **Implementation Reference**: This document serves as the **current implementation manual** for the `appctl` Bash CLI wrapper (`scripts/appctl`), metadata engines (`scripts/appctl_engine.py` / `scripts/appctl_engine_v2.py`), and currently consumed `app.yaml` manifest fields.
+> For the platform's overarching control-plane architecture, 5-stage deployment model lifecycle, and phased engineering roadmap, see [`README.md`](../README.md), [`ROADMAP.md`](../ROADMAP.md), and the [Architecture Decision Index](decisions/README.md).
+
 ---
 
 ## 1. How `appctl` Works
