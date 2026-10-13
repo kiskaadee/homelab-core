@@ -64,19 +64,19 @@ It describes the implementation trajectory and phased engineering milestones for
 ---
 
 ### Milestone P2: GitOps Privilege & Authority Hardening
-**Status**: 🎯 **Current / Up Next**
+**Status**: ✅ **Completed**
 * **Objective**: Close remaining trust boundaries in the webhook continuous deployment engine.
 * **Key Deliverables**:
   1. *Authoritative Core Registry*: Establish `Core/config/deployments.yaml` as the sole authority for admitted deployment repositories.
-  2. *Data Vault Pull-Only Policy*: Designate `~/Brain` as a read-only repository with `strategy: pull-only`, isolated from Docker socket access.
-  3. *Compose AST Security Validator*: Pre-flight parser rejecting `privileged: true`, Docker socket bind mounts, host networking, and mounts outside `~/var/lib/homelab/<app>/`.
-  4. *Systemd Sandboxing*: Apply `ProtectSystem=strict`, `NoNewPrivileges=true`, and private temporary directories to `homelab-gitops.service`.
+  2. *Decouple Data Vault from Workload GitOps*: Evict vault special-casing (`BRAIN_DIR`) from GitOps engine; continuous deployment strictly manages Sites container workloads.
+  3. *Compose AST Security Validator*: Pre-flight parser rejecting `privileged: true`, Docker socket bind mounts, host networking, and host mounts outside workload root or state root.
+  4. *Systemd Sandboxing*: Apply `ProtectSystem=strict`, `ProtectHome=read-only`, `ReadWritePaths`, `NoNewPrivileges=true`, and private temporary directories to `homelab-gitops.service`.
 * **Exit Criteria**: Path traversal rejection tests pass; Compose AST security validator rejects prohibited capabilities.
 
 ---
 
 ### Milestone P3: Manifest Contract Convergence & Provenance Engine
-**Status**: ⏳ **Planned**
+**Status**: 🎯 **Current / Up Next**
 * **Objective**: Establish a single authoritative manifest schema and two-axis inspection engine across the platform.
 * **Key Deliverables**:
   1. *Schema v1.0 & Parser Library (`core_manifest.py`)*: Strongly-typed manifest parsing, transport scheme validation (`https://`, `ssh://`, `git@`), and explicit ref semantics (moving branches vs. pinned tags vs. commit SHAs).

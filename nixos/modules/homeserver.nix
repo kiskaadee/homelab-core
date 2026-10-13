@@ -70,11 +70,13 @@
 
     environment = {
       GITOPS_SECRET_FILE = config.sops.secrets."gitops/webhook_secret".path;
+      DOCKER_CONFIG = "/home/kiskaadee/.local/state/homelab/docker";
     };
 
     serviceConfig = {
       Type = "simple";
       User = "kiskaadee";
+      SupplementaryGroups = [ "docker" ];
       WorkingDirectory = "/home/kiskaadee/Core";
       ExecStart = "${pkgs.webhook}/bin/webhook -hooks ${pkgs.writeText "hooks.json" (builtins.toJSON [
         {
@@ -91,14 +93,28 @@
       ])} -port 9000 -verbose";
       Restart = "on-failure";
       RestartSec = "5s";
+
+      # Privilege separation & Systemd sandboxing
+      NoNewPrivileges = true;
+      PrivateTmp = true;
+      ProtectSystem = "strict";
+      ProtectHome = "read-only";
+      ProtectKernelTunables = true;
+      ProtectControlGroups = true;
+      ReadWritePaths = [
+        "/home/kiskaadee/Sites"
+        "/home/kiskaadee/.local/state/homelab"
+      ];
     };
   };
 
-  # Ensure persistent directories have proper permissions for container runtimes (e.g. Stalwart UID 2000, SnappyMail)
+  # Ensure persistent directories have proper permissions for container runtimes
   systemd.tmpfiles.rules = [
     "d /home/kiskaadee/Core/config/stalwart/data 0777 kiskaadee users -"
     "d /home/kiskaadee/Core/config/stalwart/etc 0777 kiskaadee users -"
-    "d /home/kiskaadee/Core/config/snappymail/data 0777 kiskaadee users -"
+    "d /home/kiskaadee/Sites 0755 kiskaadee users -"
+    "d /home/kiskaadee/.local/state/homelab/gitops 0755 kiskaadee users -"
+    "d /home/kiskaadee/.local/state/homelab/docker 0755 kiskaadee users -"
   ];
 
   # Open ports in the firewall for Traefik, Gitea SSH, GitOps Webhook Receiver, and Mail (SMTP, Submission, SMTPS, IMAPS, ManageSieve)
