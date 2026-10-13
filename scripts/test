@@ -20,5 +20,6 @@ fi
 
 echo "❄️  Verifying NixOS flake & sandbox checks..."
 nix flake check
+nix eval .#nixosConfigurations.server.config.system.build.toplevel.drvPath --json >/dev/null
 
 echo "✨ All tests and architectural invariants passed successfully!"

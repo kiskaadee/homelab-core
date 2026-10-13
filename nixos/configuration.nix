@@ -120,9 +120,9 @@
     sops
     age
     # Python runtime (hard requirement for appctl and gitops_dispatcher.py)
-    python3.withPackages(ps: with ps; [
+    (python3.withPackages (ps: with ps; [
       pyyaml
-    ])
+    ]))
     # Modern shell utilities
     eza        # ls replacement
     ripgrep    # rg — fast grep
