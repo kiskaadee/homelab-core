@@ -153,3 +153,13 @@ When engineering changes in Core yield durable architectural insights, security 
 - Implementation roadmaps are recorded in Plans (`01-plans/`).
 - Routine maintenance, configuration adjustments, and self-explanatory fixes require no external documentation.
 - Preserve repository-local documentation (`docs/`, inline comments, commit rationale) as the primary source of truth for runtime behavior.
+
+---
+
+## Live Task Tracking (`todo.txt`)
+
+For multi-step engineering milestones and complex refactors:
+- Maintain a standard, comment-free `todo.txt` in the repository root formatted for `tuxedo` / `todo.sh`.
+- Prioritize deliverables using standard priorities (`(A)`, `(B)`, `(C)`), projects (`+<component>`), and contexts (`@<area>`).
+- Keep `todo.txt` synchronized with code reality: when a deliverable is implemented and verified, mark it completed (`x YYYY-MM-DD ...`) immediately. Never leave verified work marked as pending or untracked.
+
