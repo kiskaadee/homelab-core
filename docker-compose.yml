@@ -251,48 +251,24 @@ services:
       - ./config/stalwart/data:/var/lib/stalwart
     environment:
       - DOMAIN=${DOMAIN}
-      - STALWART_PUBLIC_URL=https://mail.${DOMAIN}
+      - STALWART_PUBLIC_URL=https://smtp.${DOMAIN}
       - STALWART_RECOVERY_ADMIN=admin:${LLDAP_LDAP_USER_PASS}
     networks:
       - proxy-net
     labels: 
       - "traefik.enable=true"
       # HTTPS WebAdmin & JMAP Router
-      - "traefik.http.routers.stalwart.rule=Host(`mail.${DOMAIN}`)"
+      - "traefik.http.routers.stalwart.rule=Host(`smtp.${DOMAIN}`)"
       - "traefik.http.routers.stalwart.entrypoints=websecure"
       - "traefik.http.routers.stalwart.tls=true"
       - "traefik.http.routers.stalwart.tls.certresolver=myresolver"
       - "traefik.http.routers.stalwart.service=stalwart-svc"
       # HTTP -> HTTPS Redirect
-      - "traefik.http.routers.stalwart-red.rule=Host(`mail.${DOMAIN}`)"
+      - "traefik.http.routers.stalwart-red.rule=Host(`smtp.${DOMAIN}`)"
       - "traefik.http.routers.stalwart-red.entrypoints=web"
       - "traefik.http.routers.stalwart-red.middlewares=https-redirect@docker"
       # Forward to Stalwart's internal HTTP/WebAdmin port
       - "traefik.http.services.stalwart-svc.loadbalancer.server.port=8080"
-
-  snappymail:
-    image: ghcr.io/the-djmaze/snappymail:latest
-    container_name: snappymail
-    restart: always
-    depends_on:
-      - stalwart
-    volumes:
-      - ./config/snappymail/data:/var/lib/snappymail/_data_
-    networks:
-      - proxy-net
-    labels:
-      - "traefik.enable=true"
-      # Public (HTTPS)
-      - "traefik.http.routers.webmail.rule=Host(`webmail.${DOMAIN}`)"
-      - "traefik.http.routers.webmail.entrypoints=websecure"
-      - "traefik.http.routers.webmail.tls=true"
-      - "traefik.http.routers.webmail.tls.certresolver=myresolver"
-      - "traefik.http.routers.webmail.service=webmail-svc"
-      # Public (Redirect)
-      - "traefik.http.routers.webmail-red.rule=Host(`webmail.${DOMAIN}`)"
-      - "traefik.http.routers.webmail-red.entrypoints=web"
-      - "traefik.http.routers.webmail-red.middlewares=https-redirect@docker"
-      - "traefik.http.services.webmail-svc.loadbalancer.server.port=8888"
 
   homepage:
     image: ghcr.io/gethomepage/homepage:latest
