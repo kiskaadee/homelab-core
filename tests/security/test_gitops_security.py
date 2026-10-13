@@ -131,16 +131,52 @@ def test_resolve_repository_resolves_valid_manifest(tmp_path: Path, monkeypatch)
     assert gitops_dispatcher.resolve_repository("notes") == canonical
 
 
-def test_resolve_repository_resolves_vault(tmp_path: Path, monkeypatch):
-    """Ensure authoritative data vault identities resolve strictly to BRAIN_DIR."""
+def test_resolve_repository_rejects_vault(tmp_path: Path, monkeypatch):
+    """Ensure data vault identities (Brain / second-brain) are not recognized by GitOps."""
+    sites_dir = tmp_path / "Sites"
+    sites_dir.mkdir()
     brain_dir = tmp_path / "Brain"
     brain_dir.mkdir()
-    monkeypatch.setattr(gitops_dispatcher, "BRAIN_DIR", brain_dir)
+    monkeypatch.setattr(gitops_dispatcher, "SITES_DIR", sites_dir)
 
-    canonical = brain_dir.resolve()
-    assert gitops_dispatcher.resolve_repository("second-brain") == canonical
-    assert gitops_dispatcher.resolve_repository("Brain") == canonical
-    assert gitops_dispatcher.resolve_repository("brain") == canonical
+    assert gitops_dispatcher.resolve_repository("second-brain") is None
+    assert gitops_dispatcher.resolve_repository("Brain") is None
+    assert gitops_dispatcher.resolve_repository("brain") is None
+
+
+def test_get_trusted_repository_mapping_from_registry(tmp_path: Path, monkeypatch):
+    """Ensure authoritative Core registry (deployments.yaml) is loaded with containment checks."""
+    sites_dir = tmp_path / "Sites"
+    sites_dir.mkdir()
+    app_dir = sites_dir / "my-app"
+    app_dir.mkdir()
+
+    outside_dir = tmp_path / "outside"
+    outside_dir.mkdir()
+
+    deployments_content = f"""
+schemaVersion: "1.0"
+repositories:
+  my-app:
+    path: "{app_dir}"
+    aliases:
+      - "app-alias"
+  escaped-app:
+    path: "{outside_dir}"
+"""
+    deployments_file = tmp_path / "deployments.yaml"
+    deployments_file.write_text(deployments_content, encoding="utf-8")
+
+    monkeypatch.setattr(gitops_dispatcher, "SITES_DIR", sites_dir)
+    monkeypatch.setattr(gitops_dispatcher, "DEPLOYMENTS_FILE", deployments_file)
+
+    mapping = gitops_dispatcher.get_trusted_repository_mapping()
+    assert "my-app" in mapping
+    assert mapping["my-app"] == app_dir.resolve()
+    assert "app-alias" in mapping
+    assert mapping["app-alias"] == app_dir.resolve()
+    # Out-of-bounds path must be rejected
+    assert "escaped-app" not in mapping
 
 
 def test_webhook_verification_valid_signature():
@@ -563,6 +599,108 @@ def test_worker_records_status_file(tmp_path: Path, monkeypatch):
     assert status["commit_sha"] == "abcdef123456"
     assert status["success"] is True
     assert "timestamp" in status
+
+
+def test_validate_compose_security_rejects_privileged(tmp_path: Path):
+    """Ensure docker-compose with privileged: true fails pre-flight validation."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine:latest
+    privileged: true
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path)
+    assert valid is False
+    assert err is not None and "privileged: true" in err
+
+
+def test_validate_compose_security_rejects_docker_socket_mount(tmp_path: Path):
+    """Ensure docker-compose with /var/run/docker.sock mount fails validation."""
+    # Test string syntax
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path)
+    assert valid is False
+    assert err is not None and "Docker socket" in err
+
+    # Test dict / long syntax
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine:latest
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path)
+    assert valid is False
+    assert err is not None and "Docker socket" in err
+
+
+def test_validate_compose_security_rejects_host_network(tmp_path: Path):
+    """Ensure docker-compose with network_mode: host fails pre-flight validation."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine:latest
+    network_mode: host
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path)
+    assert valid is False
+    assert err is not None and "network_mode: host" in err
+
+
+def test_validate_compose_security_rejects_out_of_bounds_host_bind(tmp_path: Path):
+    """Ensure host bind mounts outside workload directory or state root are rejected."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine:latest
+    volumes:
+      - /etc/shadow:/etc/shadow:ro
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path)
+    assert valid is False
+    assert err is not None and "prohibited host bind mount" in err
+
+
+def test_validate_compose_security_allows_safe_compose(tmp_path: Path):
+    """Ensure safe compose definitions with relative binds and named volumes pass validation."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text(f"""
+services:
+  app:
+    image: alpine:latest
+    volumes:
+      - {data_dir}:/data
+      - named_vol:/var/log
+volumes:
+  named_vol:
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path)
+    assert valid is True
+    assert err is None
+
+
+def test_validate_compose_security_nonexistent_file(tmp_path: Path):
+    """Ensure validation passes when compose file is absent."""
+    compose_file = tmp_path / "nonexistent.yml"
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path)
+    assert valid is True
+    assert err is None
+
 
 
 

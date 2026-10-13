@@ -20,9 +20,15 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    import yaml
+except ImportError:
+    yaml = None
+
 SITES_DIR = Path(os.environ.get("SITES_DIR", os.path.expanduser("~/Sites")))
-BRAIN_DIR = Path(os.environ.get("BRAIN_DIR", os.path.expanduser("~/Brain")))
+CORE_DIR = Path(os.environ.get("CORE_DIR", Path(__file__).resolve().parent.parent))
 CONFIG_DIR = Path(os.environ.get("HOMELAB_CONFIG_DIR", os.path.expanduser("~/.config/homelab")))
+DEPLOYMENTS_FILE = Path(os.environ.get("HOMELAB_DEPLOYMENTS_FILE", CORE_DIR / "config" / "deployments.yaml"))
 DEFAULT_SECRET_PATH = Path(os.environ.get("GITOPS_SECRET_FILE", "/run/secrets/gitops/webhook_secret"))
 STATE_DIR = Path(os.environ.get("GITOPS_STATE_DIR", Path.home() / ".local/state/homelab/gitops"))
 
@@ -150,16 +156,41 @@ def get_trusted_repository_mapping() -> dict[str, Path]:
     """
     Build authoritative mapping of logical repository identities to local paths.
     Webhook payloads can only select repositories defined in this mapping.
+    Prioritizes Core Authoritative Registry (deployments.yaml) over dynamic discovery.
     """
     mapping: dict[str, Path] = {}
 
-    # 1. Authoritative Data Vaults
-    if BRAIN_DIR.is_dir():
-        brain_canonical = BRAIN_DIR.resolve()
-        for alias in ["second-brain", "Brain", "brain"]:
-            mapping[alias] = brain_canonical
+    # 1. Authoritative Core Repository Registry (deployments.yaml)
+    registry_file = DEPLOYMENTS_FILE if DEPLOYMENTS_FILE.is_file() else (CONFIG_DIR / "deployments.yaml")
+    if registry_file.is_file():
+        try:
+            content = registry_file.read_text(encoding="utf-8")
+            registry = (yaml.safe_load(content) if yaml else parse_yaml_simple(content)) or {}
+            repo_entries = registry.get("repositories", registry) if isinstance(registry, dict) else {}
+            if isinstance(repo_entries, dict):
+                for reg_name, entry in repo_entries.items():
+                    if not isinstance(entry, dict):
+                        continue
+                    raw_path = entry.get("path")
+                    if not raw_path:
+                        continue
+                    p = Path(raw_path).expanduser().resolve()
+                    # Enforce strict containment strictly inside SITES_DIR
+                    if SITES_DIR.is_dir() and p.is_relative_to(SITES_DIR.resolve()):
+                        mapping[reg_name] = p
+                        raw_aliases = entry.get("aliases", [])
+                        if isinstance(raw_aliases, str):
+                            raw_aliases = [raw_aliases]
+                        if isinstance(raw_aliases, list):
+                            for alias in raw_aliases:
+                                if isinstance(alias, str) and alias.strip():
+                                    mapping[alias.strip()] = p
+                    else:
+                        logger.warning(f"Rejecting out-of-bounds path in deployments.yaml for '{reg_name}': {p}")
+        except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+            logger.warning(f"Failed to parse authoritative registry {registry_file}: {e}")
 
-    # 2. Workload Plane Applications in SITES_DIR
+    # 2. Dynamic Discovery in SITES_DIR (for workloads not explicitly registered)
     if SITES_DIR.is_dir():
         sites_canonical = SITES_DIR.resolve()
         for entry in SITES_DIR.iterdir():
@@ -176,54 +207,35 @@ def get_trusted_repository_mapping() -> dict[str, Path]:
             if not manifest_file.is_file():
                 continue
 
-            # Register entry directory name
+            # Register entry directory name if not already mapped
             dir_name = entry.name
-            mapping[dir_name] = resolved_entry
+            if dir_name not in mapping:
+                mapping[dir_name] = resolved_entry
 
             # Parse app.yaml for canonical name and aliases
             manifest = {}
             try:
-                manifest = parse_yaml_simple(manifest_file.read_text(encoding="utf-8"))
+                manifest_text = manifest_file.read_text(encoding="utf-8")
+                manifest = (yaml.safe_load(manifest_text) if yaml else parse_yaml_simple(manifest_text)) or {}
             except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
                 logger.warning(f"Failed to parse {manifest_file}: {e}")
 
             canonical_name = manifest.get("name")
             if canonical_name and isinstance(canonical_name, str):
                 canonical_name = canonical_name.strip()
-                mapping[canonical_name] = resolved_entry
-                if not canonical_name.startswith("homelab-"):
-                    mapping[f"homelab-{canonical_name}"] = resolved_entry
-                else:
-                    mapping[canonical_name.replace("homelab-", "", 1)] = resolved_entry
+                if canonical_name not in mapping:
+                    mapping[canonical_name] = resolved_entry
+                alias_with_prefix = f"homelab-{canonical_name}" if not canonical_name.startswith("homelab-") else canonical_name.replace("homelab-", "", 1)
+                if alias_with_prefix not in mapping:
+                    mapping[alias_with_prefix] = resolved_entry
 
             aliases = manifest.get("aliases", [])
             if isinstance(aliases, str):
                 aliases = [aliases]
             if isinstance(aliases, list):
                 for alias in aliases:
-                    if isinstance(alias, str) and alias.strip():
+                    if isinstance(alias, str) and alias.strip() and alias.strip() not in mapping:
                         mapping[alias.strip()] = resolved_entry
-
-    # 3. Optional local override registry with strict containment
-    registry_file = CONFIG_DIR / "deployments.yaml"
-    if registry_file.is_file():
-        try:
-            registry = parse_yaml_simple(registry_file.read_text(encoding="utf-8"))
-            for reg_name, entry in registry.items():
-                if not isinstance(entry, dict):
-                    continue
-                raw_path = entry.get("path")
-                if not raw_path:
-                    continue
-                p = Path(raw_path).resolve()
-                # Must be strictly relative to SITES_DIR or BRAIN_DIR
-                if (SITES_DIR.is_dir() and p.is_relative_to(SITES_DIR.resolve())) or \
-                   (BRAIN_DIR.is_dir() and p.is_relative_to(BRAIN_DIR.resolve())):
-                    mapping[reg_name] = p
-                else:
-                    logger.warning(f"Rejecting out-of-bounds path in deployments.yaml for '{reg_name}': {p}")
-        except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
-            logger.warning(f"Failed to parse custom registry {registry_file}: {e}")
 
     return mapping
 
@@ -262,13 +274,9 @@ def resolve_repository(repo_name: str) -> Path | None:
         logger.warning(f"Trusted repository target '{canonical_target}' does not exist or is not a directory.")
         return None
 
-    # Defense-in-depth: check allowed root containment
-    allowed = False
-    if SITES_DIR.is_dir() and canonical_target.is_relative_to(SITES_DIR.resolve()) or BRAIN_DIR.is_dir() and canonical_target.is_relative_to(BRAIN_DIR.resolve()):
-        allowed = True
-
-    if not allowed:
-        logger.warning(f"Resolved path '{canonical_target}' escapes allowed roots for repository '{cleaned_name}'.")
+    # Defense-in-depth: check allowed root containment strictly within SITES_DIR
+    if not (SITES_DIR.is_dir() and canonical_target.is_relative_to(SITES_DIR.resolve())):
+        logger.warning(f"Resolved path '{canonical_target}' escapes allowed SITES_DIR root for repository '{cleaned_name}'.")
         return None
 
     return canonical_target
@@ -283,18 +291,12 @@ def resolve_target(repo_name: str) -> tuple[Path | None, dict]:
     if not target_dir:
         return None, {}
 
-    # Data vault default deployment config
-    if BRAIN_DIR.is_dir() and target_dir == BRAIN_DIR.resolve():
-        return target_dir, {
-            "branch": "main",
-            "actions": ["git_pull"]
-        }
-
     manifest_file = target_dir / "app.yaml"
     manifest = {}
     if manifest_file.is_file():
         try:
-            manifest = parse_yaml_simple(manifest_file.read_text(encoding="utf-8"))
+            manifest_text = manifest_file.read_text(encoding="utf-8")
+            manifest = (yaml.safe_load(manifest_text) if yaml else parse_yaml_simple(manifest_text)) or {}
         except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
             logger.warning(f"Failed to parse {manifest_file}: {e}")
 
@@ -310,6 +312,85 @@ def resolve_target(repo_name: str) -> tuple[Path | None, dict]:
 
 ALLOWED_ACTIONS = {"git_pull", "compose_up", "compose_build", "compose_restart"}
 ALLOWED_STRATEGIES = {"compose"}
+
+
+def validate_compose_security(compose_file: Path, allowed_root: Path) -> tuple[bool, str | None]:
+    """
+    Pre-flight AST inspection of workload docker-compose.yml to reject security violations:
+    1. privileged: true
+    2. /var/run/docker.sock bind mounts
+    3. network_mode: host
+    4. host root bind mounts outside allowed state root or workload directory
+    """
+    if not compose_file.is_file():
+        return True, None
+
+    try:
+        content = compose_file.read_text(encoding="utf-8")
+    except OSError as e:
+        return False, f"Failed to read compose file {compose_file}: {e}"
+
+    if yaml is not None:
+        try:
+            data = yaml.safe_load(content) or {}
+        except yaml.YAMLError as e:
+            return False, f"Failed to parse compose YAML {compose_file}: {e}"
+    else:
+        # Fallback regex inspection if yaml module is not present
+        if re.search(r"^\s*privileged:\s*true\b", content, re.MULTILINE | re.IGNORECASE):
+            return False, "Privileged mode is prohibited in workload compose files."
+        if "/var/run/docker.sock" in content:
+            return False, "Docker socket mounts are prohibited in workload compose files."
+        if re.search(r"^\s*network_mode:\s*[\"']?host[\"']?", content, re.MULTILINE | re.IGNORECASE):
+            return False, "Host networking (network_mode: host) is prohibited in workload compose files."
+        return True, None
+
+    if not isinstance(data, dict):
+        return False, f"Invalid compose root in {compose_file}: expected mapping"
+
+    services = data.get("services")
+    if not isinstance(services, dict):
+        return True, None
+
+    state_root = Path(os.environ.get("HOMELAB_STATE_ROOT", Path.home() / "var/lib/homelab")).resolve()
+
+    for svc_name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+
+        if svc.get("privileged") is True:
+            return False, f"Service '{svc_name}' specifies prohibited 'privileged: true'."
+
+        net_mode = str(svc.get("network_mode", "")).strip().lower()
+        if net_mode == "host":
+            return False, f"Service '{svc_name}' specifies prohibited 'network_mode: host'."
+
+        volumes = svc.get("volumes", [])
+        if isinstance(volumes, list):
+            for vol in volumes:
+                host_path = ""
+                if isinstance(vol, str):
+                    if "/var/run/docker.sock" in vol:
+                        return False, f"Service '{svc_name}' directly mounts Docker socket: {vol}."
+                    if ":" in vol:
+                        host_path = vol.split(":")[0].strip()
+                elif isinstance(vol, dict):
+                    src = str(vol.get("source", ""))
+                    if "/var/run/docker.sock" in src:
+                        return False, f"Service '{svc_name}' directly mounts Docker socket: {src}."
+                    if vol.get("type") == "bind":
+                        host_path = src
+
+                # Evaluate host_path escapes
+                if host_path and host_path.startswith(("/", "~")):
+                    expanded = Path(host_path).expanduser().resolve()
+                    # Allowed if inside the workload directory or inside the state root
+                    is_in_workload = allowed_root.is_dir() and expanded.is_relative_to(allowed_root.resolve())
+                    is_in_state = state_root.is_dir() and expanded.is_relative_to(state_root)
+                    if not (is_in_workload or is_in_state):
+                        return False, f"Service '{svc_name}' specifies prohibited host bind mount: '{host_path}'."
+
+    return True, None
 
 
 def validate_manifest_deployment(manifest: dict) -> tuple[bool, str]:
@@ -370,37 +451,43 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
                 # Revision-consistent manifest validation:
                 # The working tree has now advanced to the deployed revision.
                 # Re-read and re-validate app.yaml from the exact deployed revision.
-                if not (BRAIN_DIR.is_dir() and target_dir == BRAIN_DIR.resolve()):
-                    manifest_file = target_dir / "app.yaml"
-                    if manifest_file.is_file():
-                        try:
-                            fresh_manifest = parse_yaml_simple(manifest_file.read_text(encoding="utf-8"))
-                        except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
-                            logger.error(f"❌ Post-pull manifest parse failure in {manifest_file}: {e}")
-                            return False
+                manifest_file = target_dir / "app.yaml"
+                if manifest_file.is_file():
+                    try:
+                        manifest_text = manifest_file.read_text(encoding="utf-8")
+                        fresh_manifest = (yaml.safe_load(manifest_text) if yaml else parse_yaml_simple(manifest_text)) or {}
+                    except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+                        logger.error(f"❌ Post-pull manifest parse failure in {manifest_file}: {e}")
+                        return False
 
-                        valid, err_msg = validate_manifest_deployment(fresh_manifest)
-                        if not valid:
-                            logger.error(f"❌ Post-pull manifest validation failed for '{target_dir.name}': {err_msg}")
-                            return False
+                    valid, err_msg = validate_manifest_deployment(fresh_manifest)
+                    if not valid:
+                        logger.error(f"❌ Post-pull manifest validation failed for '{target_dir.name}': {err_msg}")
+                        return False
 
-                        fresh_config = fresh_manifest.get("deployment")
-                        if isinstance(fresh_config, dict):
-                            fresh_branch = fresh_config.get("branch", "main")
-                            if branch and branch != fresh_branch:
-                                logger.error(
-                                    f"❌ Post-pull branch policy violation: revision declared branch '{fresh_branch}', "
-                                    f"but pushed branch was '{branch}'. Aborting deployment."
-                                )
-                                return False
-                            # Adopt the freshly validated actions from the deployed revision
-                            fresh_actions = fresh_config.get("actions", actions)
-                            actions = [a for a in fresh_actions if a != "git_pull"]
-                            idx = 0
-                            continue
+                    fresh_config = fresh_manifest.get("deployment")
+                    if isinstance(fresh_config, dict):
+                        fresh_branch = fresh_config.get("branch", "main")
+                        if branch and branch != fresh_branch:
+                            logger.error(
+                                f"❌ Post-pull branch policy violation: revision declared branch '{fresh_branch}', "
+                                f"but pushed branch was '{branch}'. Aborting deployment."
+                            )
+                            return False
+                        # Adopt the freshly validated actions from the deployed revision
+                        fresh_actions = fresh_config.get("actions", actions)
+                        actions = [a for a in fresh_actions if a != "git_pull"]
+                        idx = 0
+                        continue
             elif action == "compose_up":
                 compose_file = target_dir / "docker-compose.yml"
+                if not compose_file.is_file():
+                    compose_file = target_dir / "docker-compose.yaml"
                 if compose_file.is_file():
+                    valid_sec, sec_err = validate_compose_security(compose_file, target_dir)
+                    if not valid_sec:
+                        logger.error(f"❌ Compose security validation failed for '{target_dir.name}': {sec_err}")
+                        return False
                     logger.info("  ↳ [compose_up] Recreating containers (docker compose up -d)...")
                     subprocess.run(
                         ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"],
@@ -408,7 +495,13 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
                     )
             elif action == "compose_build":
                 compose_file = target_dir / "docker-compose.yml"
+                if not compose_file.is_file():
+                    compose_file = target_dir / "docker-compose.yaml"
                 if compose_file.is_file():
+                    valid_sec, sec_err = validate_compose_security(compose_file, target_dir)
+                    if not valid_sec:
+                        logger.error(f"❌ Compose security validation failed for '{target_dir.name}': {sec_err}")
+                        return False
                     logger.info("  ↳ [compose_build] Building & recreating containers...")
                     subprocess.run(
                         ["docker", "compose", "-f", str(compose_file), "build"],
@@ -420,7 +513,13 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
                     )
             elif action == "compose_restart":
                 compose_file = target_dir / "docker-compose.yml"
+                if not compose_file.is_file():
+                    compose_file = target_dir / "docker-compose.yaml"
                 if compose_file.is_file():
+                    valid_sec, sec_err = validate_compose_security(compose_file, target_dir)
+                    if not valid_sec:
+                        logger.error(f"❌ Compose security validation failed for '{target_dir.name}': {sec_err}")
+                        return False
                     logger.info("  ↳ [compose_restart] Restarting containers...")
                     subprocess.run(
                         ["docker", "compose", "-f", str(compose_file), "restart"],
@@ -493,27 +592,25 @@ def admit_deployment(
         return False, None, {}, pushed_branch, f"Repository '{repo_name}' is not recognized in trusted registry."
 
     # 4. Manifest & Strategy Validation
-    if BRAIN_DIR.is_dir() and target_dir == BRAIN_DIR.resolve():
-        deployment_config = {"branch": "main", "actions": ["git_pull"]}
-    else:
-        manifest_file = target_dir / "app.yaml"
-        manifest = {}
-        if manifest_file.is_file():
-            try:
-                manifest = parse_yaml_simple(manifest_file.read_text(encoding="utf-8"))
-            except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
-                return False, None, {}, pushed_branch, f"Failed to parse manifest {manifest_file}: {e}"
+    manifest_file = target_dir / "app.yaml"
+    manifest = {}
+    if manifest_file.is_file():
+        try:
+            manifest_text = manifest_file.read_text(encoding="utf-8")
+            manifest = (yaml.safe_load(manifest_text) if yaml else parse_yaml_simple(manifest_text)) or {}
+        except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+            return False, None, {}, pushed_branch, f"Failed to parse manifest {manifest_file}: {e}"
 
-            valid, err_msg = validate_manifest_deployment(manifest)
-            if not valid:
-                return False, None, {}, pushed_branch, f"Manifest validation error: {err_msg}"
+        valid, err_msg = validate_manifest_deployment(manifest)
+        if not valid:
+            return False, None, {}, pushed_branch, f"Manifest validation error: {err_msg}"
 
-        deployment_config = manifest.get("deployment")
-        if not isinstance(deployment_config, dict):
-            deployment_config = {
-                "branch": "main",
-                "actions": ["git_pull", "compose_up"]
-            }
+    deployment_config = manifest.get("deployment")
+    if not isinstance(deployment_config, dict):
+        deployment_config = {
+            "branch": "main",
+            "actions": ["git_pull", "compose_up"]
+        }
 
     # 5. Branch Policy Admission
     expected_branch = deployment_config.get("branch", "main")

@@ -1,0 +1,53 @@
+# Core Authoritative Repository Identity Registry
+# Governs admitted continuous deployment targets for GitOps webhook execution.
+# Owns: repository identity, canonical filesystem path, and aliases.
+# Enforces: strict path containment within ~/Sites.
+
+schemaVersion: "1.0"
+repositories:
+  snappymail:
+    path: "/home/kiskaadee/Sites/snappymail"
+    aliases:
+      - "homelab-snappymail"
+      - "mail"
+      - "webmail"
+  gitea:
+    path: "/home/kiskaadee/Sites/homelab-gitea"
+    aliases:
+      - "homelab-gitea"
+      - "git"
+  jellyfin:
+    path: "/home/kiskaadee/Sites/homelab-jellyfin"
+    aliases:
+      - "homelab-jellyfin"
+      - "media"
+  docs:
+    path: "/home/kiskaadee/Sites/homelab-doc2site"
+    aliases:
+      - "doc2site"
+      - "homelab-doc2site"
+  courses:
+    path: "/home/kiskaadee/Sites/courses"
+    aliases:
+      - "homelab-courses"
+  bdinvite:
+    path: "/home/kiskaadee/Sites/homelab-bdinvite"
+    aliases:
+      - "homelab-bdinvite"
+      - "birthday"
+  landing:
+    path: "/home/kiskaadee/Sites/homelab-landing"
+    aliases:
+      - "homelab-landing"
+  mermaid:
+    path: "/home/kiskaadee/Sites/homelab-mermaid"
+    aliases:
+      - "homelab-mermaid"
+  excalidraw:
+    path: "/home/kiskaadee/Sites/homelab-excalidraw"
+    aliases:
+      - "homelab-excalidraw"
+  houston:
+    path: "/home/kiskaadee/Sites/homelab-houston"
+    aliases:
+      - "homelab-houston"
