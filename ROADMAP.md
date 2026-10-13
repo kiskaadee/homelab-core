@@ -29,8 +29,8 @@ It describes the implementation trajectory and phased engineering milestones for
 | Milestone | Title | Focus Area | Status | Deliverables Summary |
 | :--- | :--- | :--- | :--- | :--- |
 | **P0** | **Baseline Consolidation** | Git & Architecture | ✅ **Completed** | Synchronized `refactor/appctl-rework` with `main`, recorded control plane ADR, scaffolded v2 metadata engine. |
-| **P1** | **Mail Topology Realignment** | Topology & State | 🎯 **Current / Up Next** | Move Stalwart to `smtp.roadtotech.me`; migrate SnappyMail to `~/Sites/snappymail` with zero data loss. |
-| **P2** | **GitOps Hardening** | Ingress Security | ⏳ **Planned** | Authoritative Core repository registry (`deployments.yaml`), HMAC verification, systemd execution sandboxing. |
+| **P1** | **Mail Topology Realignment** | Topology & State | ✅ **Completed** | Move Stalwart to `smtp.roadtotech.me`; migrate SnappyMail to `~/Sites/snappymail` with zero data loss. |
+| **P2** | **GitOps Hardening** | Ingress Security | 🎯 **Current / Up Next** | Authoritative Core repository registry (`deployments.yaml`), HMAC verification, systemd execution sandboxing. |
 | **P3** | **Manifest Contract** | Domain Engine | ⏳ **Planned** | Schema v1.0, authoritative `core_manifest.py` library, `source.ref` semantics, two-axis status inspection. |
 | **P4** | **Control Plane Daemon** | API & Dispatch | ⏳ **Planned** | `homelab-appctl.service` daemon, dual transports (socket + HTTP), thin-client CLI, append-only audit log. |
 | **P5** | **Identity & Secrets** | Auth & Providers | ⏳ **Planned** | ForwardAuth header parsing, user-scoped API tokens, `SecretProvider` reference resolution. |
@@ -51,7 +51,7 @@ It describes the implementation trajectory and phased engineering milestones for
 ---
 
 ### Milestone P1: Mail Topology Realignment & Zero-Data-Loss Migration
-**Status**: 🎯 **Current / Up Next**
+**Status**: ✅ **Completed**
 * **Objective**: Segregate platform mail routing from user-facing webmail while preserving all user data and settings.
 * **Key Deliverables**:
   1. *State Freeze & Verified Snapshot*: Generate timestamped, SHA256-verified backup archive of `Core/config/snappymail/data`.
@@ -64,7 +64,7 @@ It describes the implementation trajectory and phased engineering milestones for
 ---
 
 ### Milestone P2: GitOps Privilege & Authority Hardening
-**Status**: ⏳ **Planned**
+**Status**: 🎯 **Current / Up Next**
 * **Objective**: Close remaining trust boundaries in the webhook continuous deployment engine.
 * **Key Deliverables**:
   1. *Authoritative Core Registry*: Establish `Core/config/deployments.yaml` as the sole authority for admitted deployment repositories.
