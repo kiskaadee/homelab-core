@@ -308,21 +308,13 @@ def get_core_services(core_dir: str | None = None) -> list[CoreService]:
         ),
         CoreService(
             name="stalwart",
-            domain=f"mail.{HOMELAB_DOMAIN}",
+            domain=f"smtp.{HOMELAB_DOMAIN}",
             container="stalwart",
             description="All-in-one Mail Server",
             icon="email.png",
             weight=26,
         ),
 
-        CoreService(
-            name="portainer",
-            domain=f"portainer.{HOMELAB_DOMAIN}",
-            container="portainer",
-            description="Container Management GUI",
-            icon="portainer.png",
-            weight=30,
-        ),
         CoreService(
             name="dozzle",
             domain=f"logs.{HOMELAB_DOMAIN}",
