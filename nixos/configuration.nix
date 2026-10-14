@@ -19,11 +19,19 @@
   sops.defaultSopsFile = ./secrets.yaml;
   sops.defaultSopsFormat = "yaml";
 
-  # ── Nix settings ─────────────────────────────────────────────────────────────
+  # ── Nix settings & maintenance ───────────────────────────────────────────────
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
   # Pin nixpkgs registry to the flake input (avoids GitHub API calls from the CLI)
   nix.registry.nixpkgs.flake = inputs.nixpkgs;
+
+  # Automated garbage collection and store hardlink deduplication
+  nix.gc = {
+    automatic = true;
+    dates = "weekly";
+    options = "--delete-older-than 14d";
+  };
+  nix.optimise.automatic = true;
 
   nixpkgs.config.allowUnfree = true;
 
