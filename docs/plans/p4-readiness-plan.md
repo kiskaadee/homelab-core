@@ -1,6 +1,6 @@
 # 📋 Control Plane Milestone P4: Readiness Plan & Boundary Specifications
 
-**Status**: 🛠️ **In Progress (Pre-P4 Architecture & Security Gate)**  
+**Status**: ✅ **Approved & Locked (Ready for P4 Daemon Implementation)**  
 **Target Milestone**: [Milestone P4: Appctl Control Plane Daemon & API](../../ROADMAP.md#milestone-p4-appctl-control-plane-daemon--command-oriented-api)  
 **Governing ADR**: [`homelab-appctl-control-plane-architecture.md`](../decisions/README.md)  
 
@@ -25,11 +25,11 @@ This plan resolves the six architectural prerequisites necessary to implement P4
 | Deliverable | Phase | Focus | Status |
 | :--- | :--- | :--- | :--- |
 | **1. Implementation Inventory** | P0 Verification | Baseline truth, callers, dependencies, and migration state | ✅ **Completed** |
-| **2. Command & Error Contract** | P4 Prerequisite (Blocker) | Canonical domain operations, typed schemas, and error taxonomy | 🎯 **In Review** |
-| **3. Authorization Design** | Security Gate (Blocker) | Token lifecycle, RBAC matrix, and fail-closed evaluation | 🎯 **In Review** |
-| **4. Execution & Privilege Boundaries** | P4 Prerequisite | Subprocess allowlist, Docker API capabilities, and filesystem roots | ⏳ Pending Gate |
-| **5. Audit Telemetry Semantics** | P4 Prerequisite | RFC JSONL audit schema, persistent ownership, and lifecycle | ⏳ Pending Gate |
-| **6. P4 Acceptance Test Suite** | Verification | Concrete DoD, black-box transport parity, and security regression gates | ⏳ Pending Gate |
+| **2. Command & Error Contract** | P4 Prerequisite (Blocker) | Canonical domain operations, typed schemas, and error taxonomy | ✅ **Locked & Approved** |
+| **3. Authorization Design** | Security Gate (Blocker) | Token lifecycle, RBAC matrix, and fail-closed evaluation | ✅ **Locked & Approved** |
+| **4. Execution & Privilege Boundaries** | P4 Prerequisite | Subprocess allowlist, Docker API capabilities, and filesystem roots | ✅ **Locked & Approved** |
+| **5. Audit Telemetry Semantics** | P4 Prerequisite | RFC JSONL audit schema, persistent ownership, and lifecycle | ✅ **Locked & Approved** |
+| **6. P4 Acceptance Test Suite** | Verification | Concrete DoD, black-box transport parity, and security regression gates | ✅ **Locked & Approved** |
 
 ---
 
@@ -229,6 +229,7 @@ Following the pattern established in Milestone P2 for `homelab-gitops.service`, 
 - `ReadWritePaths`: Explicitly allowlisted writable roots:
   - `/home/kiskaadee/Sites` (workload definitions and Git checkouts)
   - `/home/kiskaadee/var/lib/homelab` (workload persistent state roots)
+  - `/home/kiskaadee/Core/config/homepage` (Homepage services.yaml destination)
   - `/var/log/homelab/appctl` or `/home/kiskaadee/.local/state/homelab/appctl` (audit log directory)
   - `/run/homelab` (socket runtime directory)
 - `PrivateTmp = true`: Isolated temporary directories.
@@ -308,4 +309,4 @@ Before marking Milestone P4 complete, the following automated regression suite m
 | **Truthful Error Reporting** | `test_execution_failure_audit`: Mock failing Docker compose run (exit 1). Assert daemon returns `ERR_EXECUTION_FAILED` (500) and records `phase: FAILED` in audit log. | Reject PR |
 | **Audit Persistence Gate** | `test_audit_failure_blocks_mutation`: Mock read-only audit log. Assert mutating command fails closed with zero Docker invocations. | Block Release |
 | **Daemon Crash Recovery** | `test_daemon_restart_preserves_state`: Kill and restart `homelab-appctl.service`. Assert running container stacks are undisturbed and desired Git state remains intact. | Reject PR |
-| **Existing Invariant Regression** | Run `./scripts/test`: All 84 existing unit, security, and nix flake tests pass with 0 regressions. | Block Merge |
+| **Existing Invariant Regression** | Run `./scripts/test`: All 86 existing unit, security, and nix flake tests pass with 0 regressions. | Block Merge |
