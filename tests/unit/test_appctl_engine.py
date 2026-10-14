@@ -362,3 +362,19 @@ def test_homepage_sync_core_services_domain_isolation(
     assert "https://traefik.roadtotech.me" in content
     assert "https://auth.roadtotech.me" in content
     assert "mermaid.roadtotech.me" not in content
+
+
+def test_resolve_core_stack_type():
+    """
+    Ensure resolving 'core' returns app_type='core' (entire stack),
+    while individual core services return app_type='core_service'.
+    """
+    core = engine.resolve_app("core")
+    assert core is not None
+    assert core.to_dict()["type"] == "core"
+    assert core.container == ""
+
+    traefik = engine.resolve_app("traefik")
+    assert traefik is not None
+    assert traefik.to_dict()["type"] == "core_service"
+    assert traefik.container == "traefik"

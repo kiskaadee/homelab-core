@@ -397,6 +397,7 @@ def resolve_app(
             container="",
             description="Homelab Core Platform Stack",
             dir_path=CORE_DIR,
+            app_type="core",
         )
 
     return None
