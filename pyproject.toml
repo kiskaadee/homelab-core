@@ -1,3 +1,10 @@
+[project]
+name = "homelab-core"
+version = "0.1.0"
+description = "Homelab Core platform and orchestration"
+requires-python = ">=3.13"
+dependencies = []
+
 [tool.pyright]
 extraPaths = ["scripts"]
 exclude = [

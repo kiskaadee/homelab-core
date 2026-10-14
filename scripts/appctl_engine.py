@@ -520,9 +520,9 @@ def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[s
         formatted_expiry = "-"
         if not_after_str:
             expiry_dt = datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z").replace(
-                tzinfo=datetime.timezone.utc
+                tzinfo=datetime.UTC
             )
-            now_dt = datetime.datetime.now(datetime.timezone.utc)
+            now_dt = datetime.datetime.now(datetime.UTC)
             days_remaining = (expiry_dt - now_dt).days
             formatted_expiry = expiry_dt.strftime("%Y-%m-%d")
 

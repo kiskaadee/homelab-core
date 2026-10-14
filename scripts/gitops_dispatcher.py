@@ -652,7 +652,7 @@ def enqueue_deployment(
         "deployment_config": deployment_config,
         "branch": branch,
         "commit_sha": commit_sha,
-        "queued_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "queued_at": datetime.datetime.now(datetime.UTC).isoformat(),
     }
 
     temp_file.write_text(json.dumps(data), encoding="utf-8")
@@ -706,7 +706,7 @@ def run_target_worker(target_name: str) -> bool:
                         "branch": branch,
                         "commit_sha": commit_sha,
                         "success": success,
-                        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
                     }
                     status_file.write_text(json.dumps(status_data, indent=2), encoding="utf-8")
                 except OSError as e:

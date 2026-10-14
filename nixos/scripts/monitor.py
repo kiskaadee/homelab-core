@@ -17,7 +17,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # History file location storing the transition log of public IP states.
 # Defaults to a state directory managed securely by the systemd service unit.
@@ -133,7 +133,7 @@ def record_ip(ip, status, details=None):
     """
     os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
     entry = {
-        "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+        "timestamp": datetime.now(tz=UTC).isoformat(),
         "ip": ip,
         "status": status
     }
