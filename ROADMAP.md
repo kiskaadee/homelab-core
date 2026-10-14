@@ -30,9 +30,9 @@ It describes the implementation trajectory and phased engineering milestones for
 | :--- | :--- | :--- | :--- | :--- |
 | **P0** | **Baseline Consolidation** | Git & Architecture | ✅ **Completed** | Synchronized `refactor/appctl-rework` with `main`, recorded control plane ADR, scaffolded v2 metadata engine. |
 | **P1** | **Mail Topology Realignment** | Topology & State | ✅ **Completed** | Move Stalwart to `smtp.roadtotech.me`; migrate SnappyMail to `~/Sites/snappymail` with zero data loss. |
-| **P2** | **GitOps Hardening** | Ingress Security | 🎯 **Current / Up Next** | Authoritative Core repository registry (`deployments.yaml`), HMAC verification, systemd execution sandboxing. |
-| **P3** | **Manifest Contract** | Domain Engine | ⏳ **Planned** | Schema v1.0, authoritative `core_manifest.py` library, `source.ref` semantics, two-axis status inspection. |
-| **P4** | **Control Plane Daemon** | API & Dispatch | ⏳ **Planned** | `homelab-appctl.service` daemon, dual transports (socket + HTTP), thin-client CLI, append-only audit log. |
+| **P2** | **GitOps Hardening** | Ingress Security | ✅ **Completed** | Authoritative Core repository registry (`deployments.yaml`), Compose AST security validator, systemd sandboxing. |
+| **P3** | **Manifest Contract** | Domain Engine | ✅ **Completed** | Schema v1.0, authoritative `core_manifest.py` library, two-axis status inspection, engine promotion. |
+| **P4** | **Control Plane Daemon** | API & Dispatch | 🎯 **Current / Up Next** | `homelab-appctl.service` daemon, dual transports (socket + HTTP), thin-client CLI, append-only audit log. |
 | **P5** | **Identity & Secrets** | Auth & Providers | ⏳ **Planned** | ForwardAuth header parsing, user-scoped API tokens, `SecretProvider` reference resolution. |
 | **P6** | **Deployment Model & AI**| Intent Authoring | ⏳ **Planned** | Capability catalog, `DeploymentProposal` $\to$ `DeploymentModel` compiler, Git commit pipeline. |
 | **P7** | **Operations UI & Portal** | Client Integration | ⏳ **Planned** | Dedicated Operations UI client, Homepage read-only status integration widgets. |

@@ -5,3 +5,9 @@ x 2026-10-13 (B) Implement bounded git ls-remote provenance resolver with 10s ti
 x 2026-10-13 (B) Add unit tests for provenance resolution and timeout handling with mocked network fixtures in tests/unit/test_provenance.py +test @appctl
 x 2026-10-13 (C) Promote scripts/appctl_engine_v2.py to authoritative scripts/appctl_engine.py +engine @appctl
 x 2026-10-13 (C) Verify full test suite and update CLI wrappers for appctl v2 engine promotion +test @appctl
+x 2026-10-13 (A) Reconcile appctl implementation inventory and document caller/dependency map in docs/plans/p4-readiness-plan.md +inventory @p4-gate
+x 2026-10-13 (A) Define canonical command and error contract across dual transports in docs/plans/p4-readiness-plan.md +contract @p4-gate
+x 2026-10-13 (A) Close authorization design enforcing token-everywhere policy in docs/plans/p4-readiness-plan.md +auth @p4-gate
+x 2026-10-13 (B) Specify daemon execution and privilege boundaries for Docker, subprocesses, and filesystem roots in docs/plans/p4-readiness-plan.md +security @p4-gate
+x 2026-10-13 (B) Define append-only audit telemetry schema, lifecycle, and failure handling semantics in docs/plans/p4-readiness-plan.md +audit @p4-gate
+x 2026-10-13 (C) Establish P4 acceptance test matrix and definition of done before daemon implementation in docs/plans/p4-readiness-plan.md +test @p4-gate
