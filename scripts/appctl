@@ -35,6 +35,9 @@ if [ -f "$ENV_FILE" ]; then
   set +a
 fi
 
+# Lock the homelab root domain before setup_app_env can mutate $DOMAIN
+export HOMELAB_DOMAIN="${HOMELAB_DOMAIN:-${DOMAIN_SUFFIX:-${DOMAIN:-roadtotech.me}}}"
+
 # Show help usage
 show_help() {
   echo "🚀 appctl - Homelab Container Orchestrator"

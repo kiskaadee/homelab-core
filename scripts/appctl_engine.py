@@ -37,7 +37,11 @@ SITES_DIR = os.environ.get(
     else os.path.expanduser("~/Sites"),
 )
 
-HOMELAB_DOMAIN = os.environ.get("HOMELAB_DOMAIN") or os.environ.get("DOMAIN", "")
+HOMELAB_DOMAIN = (
+    os.environ.get("HOMELAB_DOMAIN")
+    or os.environ.get("DOMAIN_SUFFIX")
+    or os.environ.get("DOMAIN", "")
+)
 
 
 def validate_environment() -> None:

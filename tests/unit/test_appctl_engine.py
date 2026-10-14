@@ -336,3 +336,29 @@ def test_homepage_sync_groups_and_sorts_correctly(
     content = output_file.read_text()
     assert content.find("- Group A") < content.find("- Group B") # Group A should appear before Group B
     assert "App2" in content # App 2 is in the file
+
+
+def test_homepage_sync_core_services_domain_isolation(
+    mock_core_dir: Path,
+    monkeypatch,
+):
+    """
+    Ensure Core Infrastructure services use HOMELAB_DOMAIN and do not leak
+    an application's domain if DOMAIN is overridden by appctl.
+    """
+    hp_config_dir = mock_core_dir / "config" / "homepage"
+    hp_config_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(engine, "HOMELAB_DOMAIN", "roadtotech.me")
+    monkeypatch.setenv("DOMAIN", "mermaid.roadtotech.me")
+
+    engine.cmd_sync_homepage(["--homepage-dir=" + str(hp_config_dir)])
+
+    output_file = hp_config_dir / "services.yaml"
+    assert output_file.exists()
+    content = output_file.read_text()
+
+    assert "https://dashboard.roadtotech.me" in content
+    assert "https://traefik.roadtotech.me" in content
+    assert "https://auth.roadtotech.me" in content
+    assert "mermaid.roadtotech.me" not in content
