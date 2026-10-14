@@ -43,6 +43,7 @@
     checks.${system} = {
       test-suite = pkgs.runCommand "core-tests" {
         nativeBuildInputs = with pkgs; [
+          git
           python3
           python3Packages.pytest
           python3Packages.pyyaml

@@ -1,7 +1,7 @@
 x 2026-10-13 (A) Create core_manifest.py schema and parser with strict transport validation (https, ssh, git) and ref classification in scripts/core_manifest.py +manifest @core
 x 2026-10-13 (A) Implement unit tests for core_manifest.py covering valid manifests, invalid URLs, and ref types in tests/unit/test_core_manifest.py +test @core
-(B) Implement two-axis inspection engine in appctl evaluating local checkout state independently from upstream provenance +provenance @appctl
-(B) Implement bounded git ls-remote provenance resolver with 10s timeout for appctl status --fetch +provenance @appctl
-(B) Add unit tests for provenance resolution and timeout handling with mocked network fixtures in tests/unit/test_provenance.py +test @appctl
+x 2026-10-13 (B) Implement two-axis inspection engine in appctl evaluating local checkout state independently from upstream provenance +provenance @appctl
+x 2026-10-13 (B) Implement bounded git ls-remote provenance resolver with 10s timeout for appctl status --fetch +provenance @appctl
+x 2026-10-13 (B) Add unit tests for provenance resolution and timeout handling with mocked network fixtures in tests/unit/test_provenance.py +test @appctl
 (C) Promote scripts/appctl_engine_v2.py to authoritative scripts/appctl_engine.py +engine @appctl
 (C) Verify full test suite and update CLI wrappers for appctl v2 engine promotion +test @appctl
