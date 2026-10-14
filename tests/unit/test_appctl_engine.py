@@ -5,11 +5,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Import appctl engine v2
+# Import appctl engine
 CORE_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(CORE_ROOT / "scripts"))
 
-import appctl_engine_v2 as engine
+import appctl_engine as engine
 
 
 @dataclass
@@ -291,7 +291,7 @@ def test_docker_image_revision_extraction(monkeypatch):
     monkeypatch.setattr("subprocess.run", mock_run_empty)
     assert engine.get_docker_image_revision("/fake/dir") is None
 
-@pytest.mark.xfail(reason="TDD in progress: cmd_sync_homepage not yet implemented")
+
 def test_homepage_sync_groups_and_sorts_correctly(
     mock_core_dir: Path,
     app_factory: AppFactory,

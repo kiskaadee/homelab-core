@@ -76,7 +76,7 @@ It describes the implementation trajectory and phased engineering milestones for
 ---
 
 ### Milestone P3: Manifest Contract Convergence & Provenance Engine
-**Status**: 🎯 **Current / Up Next**
+**Status**: ✅ **Completed**
 * **Objective**: Establish a single authoritative manifest schema and two-axis inspection engine across the platform.
 * **Key Deliverables**:
   1. *Schema v1.0 & Parser Library (`core_manifest.py`)*: Strongly-typed manifest parsing, transport scheme validation (`https://`, `ssh://`, `git@`), and explicit ref semantics (moving branches vs. pinned tags vs. commit SHAs).
@@ -87,7 +87,7 @@ It describes the implementation trajectory and phased engineering milestones for
 ---
 
 ### Milestone P4: Appctl Control Plane Daemon & Command-Oriented API
-**Status**: ⏳ **Planned**
+**Status**: 🎯 **Current / Up Next**
 * **Objective**: Evolve `appctl` from a collection of local shell scripts into the authoritative platform daemon.
 * **Key Deliverables**:
   1. *Daemon Service (`homelab-appctl.service`)*: Systemd daemon exposing one logical API across dual transports: Unix domain socket (`/run/homelab/appctl.sock`) on host and HTTP listener for network clients.

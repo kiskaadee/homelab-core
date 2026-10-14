@@ -3,5 +3,5 @@ x 2026-10-13 (A) Implement unit tests for core_manifest.py covering valid manife
 x 2026-10-13 (B) Implement two-axis inspection engine in appctl evaluating local checkout state independently from upstream provenance +provenance @appctl
 x 2026-10-13 (B) Implement bounded git ls-remote provenance resolver with 10s timeout for appctl status --fetch +provenance @appctl
 x 2026-10-13 (B) Add unit tests for provenance resolution and timeout handling with mocked network fixtures in tests/unit/test_provenance.py +test @appctl
-(C) Promote scripts/appctl_engine_v2.py to authoritative scripts/appctl_engine.py +engine @appctl
-(C) Verify full test suite and update CLI wrappers for appctl v2 engine promotion +test @appctl
+x 2026-10-13 (C) Promote scripts/appctl_engine_v2.py to authoritative scripts/appctl_engine.py +engine @appctl
+x 2026-10-13 (C) Verify full test suite and update CLI wrappers for appctl v2 engine promotion +test @appctl

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-appctl_engine.py - Homelab Metadata Engine, Orchestration Parser & Git Sync Monitor
+appctl_engine.py - Authoritative Homelab Metadata Engine & Two-Axis Inspection
 """
+
+from __future__ import annotations
 
 import contextlib
 import datetime
@@ -12,153 +14,415 @@ import ssl
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import Any
 
-CORE_DIR = os.environ.get(
-    "CORE_DIR",
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+import yaml
+from core_manifest import Manifest, ManifestValidationError, parse_manifest
+from provenance import (
+    get_local_checkout_status,
+    inspect_workload_two_axis,
 )
+
+# Dynamic Environment Paths
+CORE_DIR = os.environ.get(
+    "CORE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+)
+
 SITES_DIR = os.environ.get(
     "SITES_DIR",
     os.path.join(os.path.dirname(CORE_DIR), "Sites")
     if os.path.isdir(os.path.join(os.path.dirname(CORE_DIR), "Sites"))
-    else (
-        os.path.expanduser("~/Sites")
-        if os.path.isdir(os.path.expanduser("~/Sites"))
-        else os.path.expanduser("~/Homelab/Sites")
-    ),
+    else os.path.expanduser("~/Sites"),
 )
-ENV_FILE = os.environ.get("ENV_FILE", "/run/secrets/rendered/traefik-deployments.env")
-if not os.path.isfile(ENV_FILE) and os.path.isfile("/run/secrets/traefik-deployments.env"):
-    ENV_FILE = "/run/secrets/traefik-deployments.env"
+
+HOMELAB_DOMAIN = os.environ.get("HOMELAB_DOMAIN") or os.environ.get("DOMAIN", "")
 
 
-def parse_yaml_simple(text):
-    """Simple, zero-dependency YAML parser tailored for app.yaml schemas."""
-    data = {}
-    current_key = None
-    lines = text.splitlines()
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
+def validate_environment() -> None:
+    """Ensure mandatory environment configuration is valid before CLI execution."""
+    errors: list[str] = []
 
-        # List element
-        if stripped.startswith("- "):
-            item = stripped[2:].strip().strip("\"'")
-            if current_key:
-                if not isinstance(data.get(current_key), list):
-                    data[current_key] = []
-                data[current_key].append(item)
-            continue
+    if not HOMELAB_DOMAIN:
+        errors.append(
+            "• Missing 'HOMELAB_DOMAIN' (or 'DOMAIN') environment variable.\n"
+            "  Please export it (e.g. export HOMELAB_DOMAIN='roadtotech.me') or set it in your environment file."
+        )
 
-        if ":" in stripped:
-            k, v = stripped.split(":", 1)
-            k = k.strip()
-            v = v.strip().strip("\"'")
+    if not os.path.isdir(CORE_DIR):
+        errors.append(f"• Core directory not found at: {CORE_DIR}")
 
-            if v.lower() == "true":
-                v = True
-            elif v.lower() == "false":
-                v = False
-            elif v.isdigit():
-                v = int(v)
-
-            if indent == 0:
-                current_key = k
-                if v == "":
-                    data[k] = {}
-                else:
-                    data[k] = v
-            elif indent > 0 and current_key:
-                if not isinstance(data.get(current_key), dict):
-                    data[current_key] = {}
-                data[current_key][k] = v
-
-    return data
+    if errors:
+        print("❌ Environment Validation Failed:\n", file=sys.stderr)
+        for err in errors:
+            print(f"  {err}", file=sys.stderr)
+        sys.exit(1)
 
 
-def get_all_apps():
-    """Scan SITES_DIR for all application directories and parse app.yaml."""
-    apps = []
-    if not os.path.isdir(SITES_DIR):
+class ManifestError(Exception):
+    pass
+
+
+@dataclass
+class HomepageConfig:
+    title: str
+    group: str = "Applications"
+    icon: str = "default.png"
+    container: str = ""
+    weight: int = 50
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class SourceConfig:
+    """Upstream source provenance descriptor."""
+    type: str = "git"              # "git"
+    url: str = ""                  # e.g., "https://git.roadtotech.me/kiskaadee/bitetrack.git"
+    ref: str = "main"              # Branch (e.g. "main"), tag (e.g. "v1.0.0"), or commit SHA
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class App:
+    name: str                       # Canonical identifier (e.g., "traefik", "jellyfin")
+    description: str                # Human-readable summary for dashboards and CLI info
+    domain: str                     # Routing FQDN (e.g., "auth.roadtotech.me") or "internal".
+    dir_path: str                   # Filesystem directory (CORE_DIR for Core, or ~/Sites/<app> for Sites).
+
+    @property
+    def is_internal(self) -> bool:
+        """Returns True if the service does not expose a public TLS endpoint."""
+        return not self.domain or self.domain == "internal" or self.domain.endswith(".local") or ":" in self.domain
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for JSON consumption by scripts/appctl"""
+        data = asdict(self)
+        data["type"] = getattr(self, "app_type", "app")
+        return data
+
+
+@dataclass
+class CoreService(App):
+    container: str = ""             # Target container name inside Core's docker-compose.yml
+    weight: int = 50                # Homepage ordering weight
+    icon: str = "default.png"       # Dashboard icon filename
+    app_type: str = "core_service"
+    dir_path: str = CORE_DIR
+
+
+@dataclass
+class SitesApp(App):
+    dir_name: str = ""              # directory name in ~/Sites (e.g., "homelab-vaultwarden")
+    source: SourceConfig | None = None  # Upstream source provenance (None = Class B Image-Only)
+    aliases: list[str] = field(default_factory=list)    # CLI resolution aliases
+    visible: bool = True            # Defines whether the icon is visible in Homepage
+    auth: bool = True               # Authelia protection guard indicator
+    has_compose: bool = False       # Whether a docker-compose.yml exists
+    networks: list[str] = field(default_factory=lambda: ["proxy-net"])  # Docker network attachments
+    env: dict[str, Any] = field(default_factory=dict)   # Environment variable overrides
+    homepage: HomepageConfig | None = None              # Dashboard Card Configuration
+    manifest_error: str | None = None                   # Captured syntax/loading errors
+    app_type: str = "app"
+
+
+def load_manifest(manifest_path: str) -> dict[str, Any]:
+    """Load and parse the app manifest file."""
+    if not os.path.isfile(manifest_path):
+        raise FileNotFoundError(f"Manifest file not found at {manifest_path}")
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as file:
+            manifest_data = yaml.safe_load(file) or {}
+    except (yaml.YAMLError, OSError) as err:
+        raise ManifestError(f"YAML parsing failed: {err}") from err
+
+    if not isinstance(manifest_data, dict):
+        raise ManifestError(f"Invalid manifest root: expected `dict`, got `{type(manifest_data).__name__}`")
+
+    return manifest_data
+
+
+def sites_app_from_manifest(
+    app_dir: str,
+    manifest: dict[str, Any],
+    manifest_error: str | None = None,
+) -> SitesApp:
+    """Construct and normalize a SitesApp domain model from raw manifest data."""
+    raw_dir_name = os.path.basename(app_dir)
+    canonical_name = str(manifest.get("name") or raw_dir_name.replace("homelab-", ""))
+
+    # Normalize aliases into list[str]
+    raw_aliases = manifest.get("aliases") or []
+    if isinstance(raw_aliases, str):
+        aliases = [raw_aliases]
+    elif isinstance(raw_aliases, list):
+        aliases = [str(alias) for alias in raw_aliases]
+    else:
+        aliases = []
+
+    # Homepage card normalization
+    homepage_config: HomepageConfig | None = None
+    raw_hp = manifest.get("homepage")
+    if isinstance(raw_hp, dict):
+        homepage_config = HomepageConfig(
+            title=str(raw_hp.get("title") or canonical_name),
+            group=str(raw_hp.get("group") or "Applications"),
+            icon=str(raw_hp.get("icon") or "default.png"),
+            container=str(raw_hp.get("container") or canonical_name),
+            weight=int(raw_hp.get("weight", 50)),
+        )
+
+    has_compose = (
+        os.path.isfile(os.path.join(app_dir, "docker-compose.yaml")) or
+        os.path.isfile(os.path.join(app_dir, "docker-compose.yml"))
+    )
+
+    # Manifest Data parsing
+    raw_desc = manifest.get("description")
+    app_desc: str = str(raw_desc) if raw_desc is not None else ""
+
+    raw_dom = manifest.get("domain")
+    app_dom = str(raw_dom) if raw_dom is not None else f"{canonical_name}.{HOMELAB_DOMAIN}"
+
+    app_net = manifest.get("networks")
+    if not isinstance(app_net, list):
+        app_net = ["proxy-net"]
+
+    app_env = manifest.get("env")
+    if not isinstance(app_env, dict):
+        app_env = {}
+
+    def _as_bool(value: Any, default: bool) -> bool:
+        if isinstance(value, bool):
+            return value
+        return default
+
+    app_vis = _as_bool(manifest.get("visible"), True)
+    app_auth = _as_bool(manifest.get("auth"), True)
+
+    # Source provenance normalization
+    source_config: SourceConfig | None = None
+    raw_source = manifest.get("source")
+    if isinstance(raw_source, dict):
+        source_url = str(raw_source.get("url") or "")
+        allowed_schemes = ("https://", "ssh://", "git@")
+        if source_url:
+            if not any(source_url.startswith(s) for s in allowed_schemes):
+                err = f"Invalid source.url scheme: must start with {', '.join(allowed_schemes)}"
+                manifest_error = f"{manifest_error}; {err}" if manifest_error else err
+            else:
+                source_config = SourceConfig(
+                    type=str(raw_source.get("type") or "git"),
+                    url=source_url,
+                    ref=str(raw_source.get("ref") or "main"),
+                )
+
+    return SitesApp(
+        name=canonical_name,
+        dir_name=raw_dir_name,
+        source=source_config,
+        description=app_desc,
+        domain=app_dom,
+        dir_path=app_dir,
+        has_compose=has_compose,
+        aliases=aliases,
+        visible=app_vis,
+        auth=app_auth,
+        networks=app_net,
+        env=app_env,
+        homepage=homepage_config,
+        manifest_error=manifest_error,
+    )
+
+
+def get_sites_apps(sites_dir: str | None = None) -> list[SitesApp]:
+    """Scan the given sites directory (defaulting to SITES_DIR) for applications."""
+    target_dir = sites_dir or SITES_DIR
+    apps: list[SitesApp] = []
+    if not os.path.isdir(target_dir):
         return apps
 
-    for entry in sorted(os.listdir(SITES_DIR)):
-        app_dir = os.path.join(SITES_DIR, entry)
-        if not os.path.isdir(app_dir):
+    for entry in sorted(os.listdir(target_dir)):
+        app_dir = os.path.join(target_dir, entry)
+        if entry.startswith(".") or not os.path.isdir(app_dir):
             continue
-
         manifest_path = os.path.join(app_dir, "app.yaml")
-        manifest = {}
+        manifest: dict[str, Any] = {}
+        manifest_error: str | None = None
+
         if os.path.isfile(manifest_path):
-            with (
-                contextlib.suppress(OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError),
-                open(manifest_path, encoding="utf-8") as f,
-            ):
-                manifest = parse_yaml_simple(f.read())
+            try:
+                manifest = load_manifest(manifest_path=manifest_path)
+            except ManifestError as err:
+                manifest_error = str(err)
+        apps.append(sites_app_from_manifest(app_dir, manifest, manifest_error))
 
-        canonical_name = manifest.get("name") or entry.replace("homelab-", "")
-        aliases = manifest.get("aliases") or []
-        if isinstance(aliases, str):
-            aliases = [aliases]
-
-        app_info = {
-            "dir_name": entry,
-            "dir_path": app_dir,
-            "name": canonical_name,
-            "aliases": aliases,
-            "domain": manifest.get("domain", f"{canonical_name}.roadtotech.me"),
-            "description": manifest.get("description", ""),
-            "visible": manifest.get("visible", True),
-            "auth": manifest.get("auth", False),
-            "networks": manifest.get("networks", ["proxy-net"]),
-            "env": manifest.get("env", {}),
-            "homepage": manifest.get("homepage", {}),
-            "has_compose": os.path.isfile(os.path.join(app_dir, "docker-compose.yml")),
-        }
-        apps.append(app_info)
     return apps
 
 
-def resolve_app(query):
-    """Resolve an app query (canonical name, alias, or folder name)."""
-    apps = get_all_apps()
+def get_core_services(core_dir: str | None = None) -> list[CoreService]:
+    """Return the strongly-typed registry of Core platform services."""
+    c_dir = core_dir or CORE_DIR
+    return [
+        CoreService(
+            name="traefik",
+            domain=f"traefik.{HOMELAB_DOMAIN}",
+            container="traefik",
+            description="Edge Reverse Proxy & ACME TLS",
+            icon="traefik.png",
+            weight=10,
+            dir_path=c_dir,
+        ),
+        CoreService(
+            name="authelia",
+            domain=f"auth.{HOMELAB_DOMAIN}",
+            container="authelia",
+            description="Identity & SSO Access Control",
+            icon="authelia.png",
+            weight=20,
+            dir_path=c_dir,
+        ),
+        CoreService(
+            name="lldap",
+            domain=f"users.{HOMELAB_DOMAIN}",
+            container="lldap",
+            description="Lightweight LDAP User Directory",
+            icon="lldap.png",
+            weight=25,
+            dir_path=c_dir,
+        ),
+        CoreService(
+            name="stalwart",
+            domain=f"smtp.{HOMELAB_DOMAIN}",
+            container="stalwart",
+            description="All-in-one Mail Server",
+            icon="email.png",
+            weight=26,
+            dir_path=c_dir,
+        ),
+        CoreService(
+            name="dozzle",
+            domain=f"logs.{HOMELAB_DOMAIN}",
+            container="dozzle",
+            description="Real-time Log Viewer",
+            icon="dozzle.png",
+            weight=40,
+            dir_path=c_dir,
+        ),
+        CoreService(
+            name="socket-proxy",
+            domain="internal",
+            container="socket-proxy",
+            description="Docker Socket Security Proxy",
+            dir_path=c_dir,
+        ),
+        CoreService(
+            name="homepage",
+            domain=f"dashboard.{HOMELAB_DOMAIN}",
+            container="homepage",
+            description="Application Dashboard & System Portal",
+            icon="homepage.png",
+            weight=5,
+            dir_path=c_dir,
+        ),
+        CoreService(
+            name="diun",
+            domain="internal",
+            container="diun",
+            description="Docker Image Update Notifier",
+            dir_path=c_dir,
+        ),
+        CoreService(
+            name="watchtower",
+            domain="internal",
+            container="watchtower",
+            description="Automated Container Updates",
+            dir_path=c_dir,
+        ),
+    ]
+
+
+def resolve_app(
+    query: str,
+    apps: list[SitesApp] | None = None,
+    sites_dir: str | None = None,
+) -> App | None:
+    """
+    Resolve a query string to a SitesApp or CoreService.
+    Priority: Canonical Name > Alias > Dir Name > Stripped 'homelab-' Prefix > Core Services.
+    """
+    if apps is None:
+        apps = get_sites_apps(sites_dir=sites_dir if sites_dir is not None else SITES_DIR)
+
     query_clean = query.strip().lower()
 
     # 1. Exact match on canonical name
     for app in apps:
-        if app["name"].lower() == query_clean:
+        if app.name.lower() == query_clean:
             return app
 
     # 2. Match on alias
     for app in apps:
-        for alias in app["aliases"]:
-            if str(alias).lower() == query_clean:
-                return app
+        if any(alias.lower() == query_clean for alias in app.aliases):
+            return app
 
-    # 3. Match on directory name
+    # 3. Match directory name
     for app in apps:
-        if app["dir_name"].lower() == query_clean:
+        if app.dir_name.lower() == query_clean:
             return app
 
     # 4. Match stripped 'homelab-' prefix
     for app in apps:
-        if app["dir_name"].lower() == f"homelab-{query_clean}":
+        if app.dir_name.lower() == f"homelab-{query_clean}":
             return app
+
+    # 5. Match Core services
+    for svc in get_core_services():
+        if svc.name.lower() == query_clean:
+            return svc
+
+    if query_clean == "core":
+        return CoreService(
+            name="core",
+            domain=HOMELAB_DOMAIN,
+            container="",
+            description="Homelab Core Platform Stack",
+            dir_path=CORE_DIR,
+        )
 
     return None
 
 
-def get_docker_status(dir_path):
-    """Get container running status for a docker-compose directory."""
-    if not os.path.isdir(dir_path) or not os.path.isfile(os.path.join(dir_path, "docker-compose.yml")):
-        return "⚪ Not Stack"
-
+def get_docker_status(
+    dir_path: str | Path,
+    container_name: str | None = None,
+) -> str:
+    """Get container running status for a docker-compose directory or single Core container."""
     try:
+        if container_name:
+            inspect_res = subprocess.run(
+                ["docker", "inspect", "-f", "{{.State.Running}}", container_name],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            state = inspect_res.stdout.strip()
+            if state.lower() == "true":
+                return "🟢 Running (1)"
+            return "🔴 Stopped"
+
+        path = Path(dir_path)
+        if path.exists() and not (path / "docker-compose.yml").is_file() and not (path / "docker-compose.yaml").is_file():
+            return "⚪ Not Stack"
+
         res = subprocess.run(
             ["docker", "compose", "ps", "-q"],
-            cwd=dir_path,
+            cwd=str(path),
             capture_output=True,
             text=True,
             check=False,
@@ -187,171 +451,49 @@ def get_docker_status(dir_path):
         return "❓ Unknown"
 
 
-def get_git_sync_status(dir_path):
-    """Inspect local git repository tracking status against remote."""
-    if not os.path.isdir(os.path.join(dir_path, ".git")):
-        return "⚪ Non-Git"
-
+def get_docker_image_revision(
+    dir_path: str | Path | None = None,
+    container_name: str | None = None,
+) -> str | None:
+    """Extract `org.opencontainers.image.revision` label from running container."""
     try:
-        # Check dirty uncommitted status
-        status_res = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=dir_path,
+        target: str | None = container_name
+        if not target and dir_path:
+            res = subprocess.run(
+                ["docker", "compose", "ps", "-q"],
+                cwd=str(dir_path),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            ids = [c for c in res.stdout.strip().splitlines() if c]
+            if ids:
+                target = ids[0]
+
+        if not target:
+            return None
+
+        inspect_res = subprocess.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                '{{ index .Config.Labels "org.opencontainers.image.revision" }}',
+                target,
+            ],
             capture_output=True,
             text=True,
             check=False,
         )
-        is_dirty = bool(status_res.stdout.strip())
-
-        # Check upstream branch
-        upstream_res = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            cwd=dir_path,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if upstream_res.returncode != 0:
-            return "⚪ Untracked *" if is_dirty else "⚪ Untracked"
-
-        # Check ahead / behind counts
-        rev_res = subprocess.run(
-            ["git", "rev-list", "--left-right", "--count", "HEAD...@{u}"],
-            cwd=dir_path,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if rev_res.returncode != 0:
-            return "❓ Sync Error"
-
-        parts = rev_res.stdout.strip().split()
-        if len(parts) != 2:
-            return "❓ Unknown"
-
-        ahead = int(parts[0])
-        behind = int(parts[1])
-
-        if ahead == 0 and behind == 0:
-            badge = "✓ Synced"
-        elif ahead > 0 and behind == 0:
-            badge = f"⬆ {ahead} Ahead"
-        elif ahead == 0 and behind > 0:
-            badge = f"⬇ {behind} Behind"
-        else:
-            badge = f"⚡ {ahead}⬆ {behind}⬇"
-
-        if is_dirty:
-            badge += " *"
-
-        return badge
-    except (subprocess.SubprocessError, OSError, ValueError):
-        return "❓ Unknown"
-
-
-def get_git_diagnostics(dir_path):
-    """Get detailed git diagnostics for info command."""
-    if not os.path.isdir(os.path.join(dir_path, ".git")):
+        revision = inspect_res.stdout.strip()
+        if revision and revision != "<no value>":
+            return revision
+        return None
+    except (subprocess.SubprocessError, OSError):
         return None
 
-    diag = {}
-    with contextlib.suppress(subprocess.SubprocessError, OSError):
-        branch = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            cwd=dir_path,
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-        diag["branch"] = branch or "HEAD (detached)"
 
-        remote = subprocess.run(
-            ["git", "config", "--get", "remote.origin.url"],
-            cwd=dir_path,
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-        diag["remote"] = remote or "None"
-
-        upstream = subprocess.run(
-            ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            cwd=dir_path,
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-        diag["upstream"] = upstream or "None"
-
-        diag["sync_badge"] = get_git_sync_status(dir_path)
-
-        status_porcelain = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=dir_path,
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-        diag["dirty_files"] = status_porcelain.splitlines() if status_porcelain else []
-    return diag
-
-
-def fetch_repository(dir_path):
-    """Run git fetch on a single repository with timeout."""
-    if os.path.isdir(os.path.join(dir_path, ".git")):
-        with contextlib.suppress(subprocess.SubprocessError, OSError):
-            subprocess.run(
-                ["git", "fetch", "--quiet"],
-                cwd=dir_path,
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-
-
-def fetch_all_repositories(apps, include_core=True):
-    """Fetch all repositories concurrently."""
-    dirs_to_fetch = [app["dir_path"] for app in apps]
-    if include_core and os.path.isdir(CORE_DIR):
-        dirs_to_fetch.append(CORE_DIR)
-
-    with ThreadPoolExecutor(max_workers=8) as executor:
-        executor.map(fetch_repository, dirs_to_fetch)
-
-
-def get_core_services():
-    """Inspect Core stack from CORE_DIR."""
-    core_services = [
-        {"name": "traefik", "domain": "traefik.roadtotech.me", "container": "traefik", "desc": "Edge Reverse Proxy & ACME TLS"},
-        {"name": "authelia", "domain": "auth.roadtotech.me", "container": "authelia", "desc": "Identity & SSO Access Control"},
-        {"name": "lldap", "domain": "users.roadtotech.me", "container": "lldap", "desc": "Lightweight LDAP User & Group Directory"},
-        {"name": "stalwart", "domain": "smtp.roadtotech.me", "container": "stalwart", "desc": "All-in-one Mail Server & JMAP/IMAP/SMTP"},
-        {"name": "dozzle", "domain": "logs.roadtotech.me", "container": "dozzle", "desc": "Real-time Log Viewer"},
-        {"name": "socket-proxy", "domain": "internal", "container": "socket-proxy", "desc": "Docker Socket Security Proxy"},
-        {"name": "homepage", "domain": "dashboard.roadtotech.me", "container": "homepage", "desc": "Application Dashboard & System Portal"},
-        {"name": "diun", "domain": "internal", "container": "diun", "desc": "Docker Image Update Notifier"},
-        {"name": "watchtower", "domain": "internal", "container": "watchtower", "desc": "Automated Container Updates"},
-    ]
-    for svc in core_services:
-        try:
-            inspect_res = subprocess.run(
-                ["docker", "inspect", "-f", "{{.State.Running}}", svc["container"]],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            state = inspect_res.stdout.strip()
-            if state.lower() == "true":
-                svc["status"] = "🟢 Running (1)"
-            else:
-                svc["status"] = "🔴 Stopped"
-        except (subprocess.SubprocessError, OSError):
-            svc["status"] = "❓ Unknown"
-    return core_services
-
-
-def check_ssl_cert(domain, port=443, timeout=3.0):
+def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[str, Any]:
     """Inspect SSL/TLS certificate for a domain using standard library ssl and socket."""
     if not domain or domain == "internal" or domain.endswith(".local") or ":" in domain:
         return {
@@ -371,9 +513,9 @@ def check_ssl_cert(domain, port=443, timeout=3.0):
             socket.create_connection((domain, port), timeout=timeout) as sock,
             ctx.wrap_socket(sock, server_hostname=domain) as ssock,
         ):
-            cert = ssock.getpeercert()
+            cert = ssock.getpeercert() or {}
 
-        not_after_str = cert.get("notAfter")
+        not_after_str = str(cert.get("notAfter", ""))
         days_remaining = None
         formatted_expiry = "-"
         if not_after_str:
@@ -384,11 +526,13 @@ def check_ssl_cert(domain, port=443, timeout=3.0):
             days_remaining = (expiry_dt - now_dt).days
             formatted_expiry = expiry_dt.strftime("%Y-%m-%d")
 
-        issuer_dict = dict(x[0] for x in cert.get("issuer", ()))
-        issuer = issuer_dict.get("organizationName") or issuer_dict.get("commonName") or "Unknown"
+        issuer_raw = cert.get("issuer", ())
+        issuer_dict = dict(x[0] for x in issuer_raw) if issuer_raw else {}
+        issuer = str(issuer_dict.get("organizationName") or issuer_dict.get("commonName") or "Unknown")
 
-        subject_dict = dict(x[0] for x in cert.get("subject", ()))
-        subject = subject_dict.get("commonName") or domain
+        subject_raw = cert.get("subject", ())
+        subject_dict = dict(x[0] for x in subject_raw) if subject_raw else {}
+        subject = str(subject_dict.get("commonName") or domain)
 
         if days_remaining is not None:
             if days_remaining < 0:
@@ -423,10 +567,10 @@ def check_ssl_cert(domain, port=443, timeout=3.0):
         }
 
 
-def check_all_ssl_certs(domains):
+def check_all_ssl_certs(domains: list[str]) -> dict[str, dict[str, Any]]:
     """Check multiple domains concurrently with ThreadPoolExecutor."""
     valid_domains = [d for d in set(domains) if d and d != "internal" and not d.endswith(".local") and ":" not in d]
-    results = {}
+    results: dict[str, dict[str, Any]] = {}
     if not valid_domains:
         return results
 
@@ -438,355 +582,54 @@ def check_all_ssl_certs(domains):
     return results
 
 
-def cmd_list(args):
-    """Format and print application and core stack listings with Git sync status and optional SSL cert check."""
-    show_core = any(a in ["--core", "-c", "--all", "-a"] for a in args)
-    should_fetch = any(a in ["--fetch", "-f"] for a in args)
-    show_ssl = any(a in ["--ssl", "-s"] for a in args)
-    apps = get_all_apps()
+def cmd_sync_homepage(args: list[str] | None = None) -> None:
+    """Synchronize Homepage dashboard services.yaml from app.yaml metadata."""
+    args = args or []
+    hp_dir = os.path.join(CORE_DIR, "config", "homepage")
+    for arg in args:
+        if arg.startswith("--homepage-dir="):
+            hp_dir = arg.split("=", 1)[1]
 
-    if should_fetch:
-        print("📡 Fetching remote updates across all repositories...")
-        fetch_all_repositories(apps, include_core=show_core)
+    services_yaml_path = os.path.join(hp_dir, "services.yaml")
+    os.makedirs(hp_dir, exist_ok=True)
 
-    ssl_data = {}
-    if show_ssl:
-        domains_to_check = [app["domain"] for app in apps]
-        if show_core:
-            core_services = get_core_services()
-            domains_to_check.extend([svc["domain"] for svc in core_services])
-        print("🔒 Inspecting SSL/TLS certificates...")
-        ssl_data = check_all_ssl_certs(domains_to_check)
+    apps = get_sites_apps()
+    visible_apps = [a for a in apps if a.visible and not a.manifest_error]
 
-    if show_ssl:
-        print(f"{'SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'CERT STATUS':<22} {'ISSUER'}")
-        print(f"{'-------':<16} {'------':<15} {'--------':<15} {'------':<28} {'-----------':<22} {'------'}")
-    else:
-        print(f"{'SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'DIRECTORY'}")
-        print(f"{'-------':<16} {'------':<15} {'--------':<15} {'------':<28} {'---------'}")
-
-    for app in apps:
-        status = get_docker_status(app["dir_path"])
-        git_status = get_git_sync_status(app["dir_path"])
-        if show_ssl:
-            cert_info = ssl_data.get(app["domain"], check_ssl_cert(app["domain"]))
-            print(f"{app['name']:<16} {status:<15} {git_status:<15} {app['domain']:<28} {cert_info['status']:<22} {cert_info['issuer']}")
-        else:
-            rel_dir = app["dir_path"].replace(os.path.expanduser("~"), "~")
-            print(f"{app['name']:<16} {status:<15} {git_status:<15} {app['domain']:<28} {rel_dir}")
-
-    if show_core:
-        core_git = get_git_sync_status(CORE_DIR)
-        print()
-        if show_ssl:
-            print(f"{'CORE SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'CERT STATUS':<22} {'ISSUER'}")
-            print(f"{'------------':<16} {'------':<15} {'--------':<15} {'------':<28} {'-----------':<22} {'------'}")
-        else:
-            print(f"{'CORE SERVICE':<16} {'STATUS':<15} {'GIT SYNC':<15} {'DOMAIN':<28} {'DIRECTORY'}")
-            print(f"{'------------':<16} {'------':<15} {'--------':<15} {'------':<28} {'---------'}")
-        core_services = get_core_services()
-        rel_core = CORE_DIR.replace(os.path.expanduser("~"), "~")
-        for i, svc in enumerate(core_services):
-            row_git = core_git if i == 0 else ""
-            if show_ssl:
-                cert_info = ssl_data.get(svc["domain"], check_ssl_cert(svc["domain"]))
-                print(f"{svc['name']:<16} {svc['status']:<15} {row_git:<15} {svc['domain']:<28} {cert_info['status']:<22} {cert_info['issuer']}")
-            else:
-                print(f"{svc['name']:<16} {svc['status']:<15} {row_git:<15} {svc['domain']:<28} {rel_core}")
-
-
-def cmd_ssl(args):
-    """Check SSL/TLS certificates across services or for an individual service."""
-    targets = [a for a in args if not a.startswith("-")]
-
-    if targets:
-        for target in targets:
-            app = resolve_app(target)
-            domain = None
-            name = target
-            if app:
-                domain = app["domain"]
-                name = app["name"]
-            else:
-                for svc in get_core_services():
-                    if svc["name"].lower() == target.lower():
-                        domain = svc["domain"]
-                        name = svc["name"]
-                        break
-
-            if not domain:
-                print(f"❌ Error: Service '{target}' not found in ~/Sites or Core.")
-                continue
-
-            print(f"🔒 SSL/TLS Certificate: {name} ({domain})")
-            print("-" * 50)
-            cert_info = check_ssl_cert(domain)
-            print(f"Domain:          {cert_info['domain']}")
-            print(f"Status:          {cert_info['status']}")
-            print(f"Issuer:          {cert_info['issuer']}")
-            print(f"Subject:         {cert_info['subject']}")
-            print(f"Expiration:      {cert_info['not_after']}")
-            if cert_info["days_remaining"] is not None:
-                print(f"Days Remaining:  {cert_info['days_remaining']} days ({cert_info['formatted_expiry']})")
-            if cert_info["error"]:
-                print(f"Details/Error:   {cert_info['error']}")
-            print()
-        return
-
-    # Check all domains across apps and core
-    apps = get_all_apps()
-    services_to_check = [(app["name"], app["domain"]) for app in apps]
-    for svc in get_core_services():
-        if svc["domain"] != "internal":
-            services_to_check.append((f"{svc['name']} (core)", svc["domain"]))
-
-    domains = [d for _, d in services_to_check]
-    print(f"🔒 Checking SSL/TLS certificates for {len(domains)} service(s)...")
-    ssl_results = check_all_ssl_certs(domains)
-
-    print(f"\n{'SERVICE':<20} {'DOMAIN':<30} {'STATUS':<24} {'ISSUER':<20} {'EXPIRES'}")
-    print(f"{'-------':<20} {'------':<30} {'------':<24} {'------':<20} {'-------'}")
-
-    for name, domain in services_to_check:
-        info = ssl_results.get(domain, check_ssl_cert(domain))
-        print(f"{name:<20} {domain:<30} {info['status']:<24} {info['issuer']:<20} {info['formatted_expiry']}")
-
-
-def cmd_info(args):
-    """Show detailed metadata, runtime overview, and Git diagnostics for a service."""
-    clean_args = [a for a in args if not a.startswith("-")]
-    if not clean_args:
-        print("❌ Error: Service name required for 'info' command")
-        sys.exit(1)
-
-    show_ssl = any(a in ["--ssl", "-s"] for a in args)
-    query = clean_args[0]
-    app = resolve_app(query)
-    if not app:
-        # Check if it's a core service
-        core_services = get_core_services()
-        for svc in core_services:
-            if svc["name"] == query:
-                print(f"ℹ️  Core Infrastructure Service: {svc['name']}")
-                print("-" * 45)
-                print(f"Directory:       {CORE_DIR}")
-                print(f"Status:          {svc['status']}")
-                print(f"Primary Domain:  https://{svc['domain']}" if svc["domain"] != "internal" else f"Domain:          {svc['domain']}")
-                print(f"Description:     {svc['desc']}")
-
-                core_diag = get_git_diagnostics(CORE_DIR)
-                if core_diag:
-                    print("\nGit Repository (Core):")
-                    print(f"  Branch:        {core_diag['branch']}")
-                    print(f"  Upstream:      {core_diag['upstream']}")
-                    print(f"  Remote URL:    {core_diag['remote']}")
-                    print(f"  Sync Status:   {core_diag['sync_badge']}")
-                    if core_diag["dirty_files"]:
-                        print(f"  Dirty Files:   {len(core_diag['dirty_files'])} uncommitted file(s)")
-
-                if show_ssl and svc["domain"] != "internal":
-                    cert_info = check_ssl_cert(svc["domain"])
-                    print("\nSSL/TLS Certificate:")
-                    print(f"  Status:        {cert_info['status']}")
-                    print(f"  Issuer:        {cert_info['issuer']}")
-                    print(f"  Subject:       {cert_info['subject']}")
-                    print(f"  Expiration:    {cert_info['not_after']}")
-                    if cert_info["days_remaining"] is not None:
-                        print(f"  Days Left:     {cert_info['days_remaining']} day(s) ({cert_info['formatted_expiry']})")
-                    if cert_info["error"]:
-                        print(f"  Details/Error: {cert_info['error']}")
-                return
-
-        print(f"❌ Error: Application '{query}' not found under {SITES_DIR}")
-        sys.exit(1)
-
-    status = get_docker_status(app["dir_path"])
-    aliases_str = ", ".join(app["aliases"]) if app["aliases"] else "None"
-    auth_str = "🔒 Protected (Authelia)" if app["auth"] else "⚪ Disabled (Public)"
-    visible_str = f"🟢 Visible ({app['homepage'].get('group', 'Default')})" if app["visible"] else "⚪ Hidden"
-    networks_str = ", ".join(app["networks"]) if app["networks"] else "proxy-net"
-
-    print(f"ℹ️  Application Information: {app['name']}")
-    print("-" * 45)
-    print(f"Directory:       {app['dir_path']}")
-    print(f"Canonical Name:  {app['name']}")
-    print(f"Aliases:         {aliases_str}")
-    print(f"Status:          {status}")
-    print(f"Primary Domain:  https://{app['domain']}")
-    print(f"Authelia Guard:  {auth_str}")
-    print(f"Dashboard View:  {visible_str}")
-    print(f"Networks:        {networks_str}")
-    if app["description"]:
-        print(f"Description:     {app['description']}")
-
-    # Git Diagnostics
-    git_diag = get_git_diagnostics(app["dir_path"])
-    if git_diag:
-        print("\nGit Repository Diagnostics:")
-        print(f"  Branch:        {git_diag['branch']}")
-        print(f"  Upstream:      {git_diag['upstream']}")
-        print(f"  Remote URL:    {git_diag['remote']}")
-        print(f"  Sync Status:   {git_diag['sync_badge']}")
-        if git_diag["dirty_files"]:
-            print(f"  Dirty Files:   {len(git_diag['dirty_files'])} uncommitted file(s)")
-            for f in git_diag["dirty_files"][:5]:
-                print(f"    - {f}")
-            if len(git_diag["dirty_files"]) > 5:
-                print(f"    ... and {len(git_diag['dirty_files']) - 5} more")
-
-    if show_ssl and app["domain"] != "internal":
-        cert_info = check_ssl_cert(app["domain"])
-        print("\nSSL/TLS Certificate:")
-        print(f"  Status:        {cert_info['status']}")
-        print(f"  Issuer:        {cert_info['issuer']}")
-        print(f"  Subject:       {cert_info['subject']}")
-        print(f"  Expiration:    {cert_info['not_after']}")
-        if cert_info["days_remaining"] is not None:
-            print(f"  Days Left:     {cert_info['days_remaining']} day(s) ({cert_info['formatted_expiry']})")
-        if cert_info["error"]:
-            print(f"  Details/Error: {cert_info['error']}")
-
-    if app["env"]:
-        print("\nConfigured Environment Defaults:")
-        for k, v in app["env"].items():
-            print(f"  {k} = {v}")
-
-    if app["visible"] and app["homepage"]:
-        hp = app["homepage"]
-        print("\nHomepage Dashboard Card:")
-        print(f"  Title:     {hp.get('title', app['name'].title())}")
-        print(f"  Group:     {hp.get('group', 'Applications')}")
-        print(f"  Icon:      {hp.get('icon', 'default.png')}")
-        print(f"  Container: {hp.get('container', app['name'])}")
-
-
-def cmd_resolve(args):
-    """Resolve service name and output JSON for the bash caller."""
-    if not args:
-        sys.exit(1)
-    query = args[0].strip()
-    query_lower = query.lower()
-
-    if query_lower == "core":
-        print(json.dumps({
-            "type": "core",
-            "name": "core",
-            "dir_path": CORE_DIR,
-            "container": "",
-            "domain": "internal",
-            "has_compose": os.path.isfile(os.path.join(CORE_DIR, "docker-compose.yml")),
-        }))
-        return
-
-    # Check if query matches a core infrastructure service
-    for svc in get_core_services():
-        if svc["name"].lower() == query_lower:
-            print(json.dumps({
-                "type": "core_service",
-                "name": svc["name"],
-                "dir_path": CORE_DIR,
-                "container": svc["container"],
-                "domain": svc["domain"],
-                "has_compose": os.path.isfile(os.path.join(CORE_DIR, "docker-compose.yml")),
-            }))
-            return
-
-    # Check applications under SITES_DIR
-    app = resolve_app(query)
-    if not app:
-        sys.exit(1)
-    app["type"] = "app"
-    print(json.dumps(app))
-
-
-def cmd_complete(args):
-    """Output completions for shell autocomplete."""
-    target = args[0] if args else "all"
-
-    commands = [
-        "list", "status", "ssl", "info", "up", "down",
-        "restart", "update", "pull", "logs", "config", "sync", "completion",
-    ]
-
-    if target == "commands":
-        print(" ".join(commands))
-        return
-
-    services = ["core"]
-    for svc in get_core_services():
-        services.append(svc["name"])
-
-    for app in get_all_apps():
-        services.append(app["name"])
-        for alias in app.get("aliases", []):
-            services.append(str(alias))
-
-    if target == "services":
-        print(" ".join(sorted(set(services))))
-        return
-
-    print(" ".join(sorted(set(commands + services))))
-
-
-def cmd_sync_homepage(args):
-    """Compile Sites/*/app.yaml into Core/config/homepage/services.yaml."""
-    homepage_dir = os.path.join(CORE_DIR, "config", "homepage")
-    for a in args:
-        if a.startswith("--homepage-dir="):
-            homepage_dir = a.split("=", 1)[1]
-        elif a.startswith("--dashboard-dir="):
-            homepage_dir = os.path.join(a.split("=", 1)[1], "config")
-
-    services_yaml_path = os.path.join(homepage_dir, "services.yaml")
-    if not os.path.isdir(os.path.dirname(services_yaml_path)):
-        print(f"❌ Error: Homepage directory not found at {homepage_dir}")
-        sys.exit(1)
-
-    apps = get_all_apps()
-    visible_apps = [a for a in apps if a.get("visible", True)]
-
-    # Group by homepage group
-    groups = {}
+    groups: dict[str, list[dict[str, Any]]] = {}
 
     # 1. Add Core Infrastructure services
-    core_group = "Core Infrastructure"
-    groups[core_group] = []
-    core_metadata = {
-        "traefik": {"title": "Traefik", "icon": "traefik.png", "weight": 10},
-        "authelia": {"title": "Authelia", "icon": "authelia.png", "weight": 20},
-        "lldap": {"title": "LLDAP Directory", "icon": "lldap.png", "weight": 25},
-        "stalwart": {"title": "Stalwart Mail", "icon": "email.png", "weight": 26},
-        "dozzle": {"title": "Dozzle", "icon": "dozzle.png", "weight": 40},
-    }
-    for svc in get_core_services():
-        name = svc["name"]
-        if name in core_metadata and svc["domain"] != "internal":
-            meta = core_metadata[name]
-            groups[core_group].append({
-                "title": meta["title"],
-                "icon": meta["icon"],
-                "href": f"https://{svc['domain']}",
-                "description": svc["desc"],
-                "server": "my-docker",
-                "container": svc["container"],
-                "weight": meta["weight"],
-            })
+    core_services = get_core_services()
+    if core_services:
+        core_group = "Core Infrastructure"
+        groups[core_group] = []
+        for svc in core_services:
+            if not svc.is_internal:
+                groups[core_group].append({
+                    "title": svc.name.title(),
+                    "icon": getattr(svc, "icon", "default.png"),
+                    "href": f"https://{svc.domain}",
+                    "description": svc.description,
+                    "server": "my-docker",
+                    "container": getattr(svc, "container", svc.name),
+                    "weight": getattr(svc, "weight", 50),
+                })
 
-    # 2. Add Site applications
-    icons_dir = os.path.join(homepage_dir, "icons")
+    # 2. Add Sites applications
+    icons_dir = os.path.join(hp_dir, "icons")
     for app in visible_apps:
-        hp = app.get("homepage", {})
-        group_name = hp.get("group", "Applications")
+        hp = app.homepage
+        group_name = hp.group if hp else "Applications"
         if group_name not in groups:
             groups[group_name] = []
 
-        card_title = hp.get("title", app["name"].title())
-        icon = hp.get("icon", f"{app['name']}.png")
-        container = hp.get("container", app["name"])
-        weight = hp.get("weight", 50)
-        desc = app.get("description", "")
+        card_title = hp.title if hp else app.name.title()
+        icon = hp.icon if hp else f"{app.name}.png"
+        container = hp.container if hp else app.name
+        weight = hp.weight if hp else 50
+        desc = app.description
 
-        # Resolve custom local icons mounted in config/homepage/icons
+        # Icon resolution
         base_icon, ext = os.path.splitext(icon)
         matched_icon = None
         if os.path.isdir(icons_dir) and not icon.startswith(("/", "http")):
@@ -804,16 +647,15 @@ def cmd_sync_homepage(args):
         if matched_icon:
             icon = f"/icons/{matched_icon}"
 
-        card_data = {
+        groups[group_name].append({
             "title": card_title,
             "icon": icon,
-            "href": f"https://{app['domain']}",
+            "href": f"https://{app.domain}",
             "description": desc,
             "server": "my-docker",
             "container": container,
             "weight": weight,
-        }
-        groups[group_name].append(card_data)
+        })
 
     # Preferred group order
     preferred_order = [
@@ -823,11 +665,11 @@ def cmd_sync_homepage(args):
         "Development & AI",
         "Applications",
     ]
-    sorted_groups = []
+    sorted_groups: list[str] = []
     for g in preferred_order:
         if g in groups:
             sorted_groups.append(g)
-    for g in groups:
+    for g in sorted(groups.keys()):
         if g not in sorted_groups:
             sorted_groups.append(g)
 
@@ -847,21 +689,252 @@ def cmd_sync_homepage(args):
         lines.append("")
 
     content = "\n".join(lines).strip() + "\n"
-    with open(services_yaml_path, "w") as f:
+    with open(services_yaml_path, "w", encoding="utf-8") as f:
         f.write(content)
 
     print(f"✨ Homepage synchronized successfully ({len(visible_apps)} visible apps in {len(sorted_groups)} groups)")
     print(f"📄 Generated {services_yaml_path}")
 
 
-def main():
+def cmd_list(args: list[str]) -> None:
+    """Format and print application and core stack listings with two-axis status and optional SSL cert check."""
+    show_core = any(a in ["--core", "-c", "--all", "-a"] for a in args)
+    should_fetch = any(a in ["--fetch", "-f"] for a in args)
+    show_ssl = any(a in ["--ssl", "-s"] for a in args)
+    apps = get_sites_apps()
+
+    ssl_data: dict[str, dict[str, Any]] = {}
+    if show_ssl:
+        domains_to_check = [app.domain for app in apps]
+        if show_core:
+            core_services = get_core_services()
+            domains_to_check.extend([svc.domain for svc in core_services])
+        print("🔒 Inspecting SSL/TLS certificates...")
+        ssl_data = check_all_ssl_certs(domains_to_check)
+
+    if show_ssl:
+        print(f"{'SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<22} {'STATUS':<15} {'DOMAIN':<28} {'CERT'}")
+        print(f"{'-------':<16} {'----------':<22} {'----------':<22} {'------':<15} {'------':<28} {'----'}")
+    else:
+        print(f"{'SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<24} {'STATUS':<15} {'DOMAIN':<28}")
+        print(f"{'-------':<16} {'----------':<22} {'----------':<24} {'------':<15} {'------':<28}")
+
+    for app in apps:
+        app_path = Path(app.dir_path)
+        docker_status = get_docker_status(app_path)
+
+        manifest_file = app_path / "app.yaml"
+        if manifest_file.is_file():
+            try:
+                manifest_obj = parse_manifest(manifest_file)
+            except (ManifestValidationError, yaml.YAMLError, OSError, ValueError, KeyError):
+                manifest_obj = Manifest(name=app.name, domain=app.domain)
+        else:
+            manifest_obj = Manifest(name=app.name, domain=app.domain)
+
+        two_axis = inspect_workload_two_axis(
+            app_dir=app_path,
+            manifest=manifest_obj,
+            fetch_upstream=should_fetch,
+            docker_status=docker_status,
+        )
+
+        dep_str = two_axis.checkout.status_label
+        prov_str = two_axis.provenance.status.value
+
+        if show_ssl:
+            cert_info = ssl_data.get(app.domain, check_ssl_cert(app.domain))
+            cert_badge = cert_info.get("status", "-")
+            print(f"{app.name:<16} {dep_str:<22} {prov_str:<22} {docker_status:<15} {app.domain:<28} {cert_badge}")
+        else:
+            print(f"{app.name:<16} {dep_str:<22} {prov_str:<24} {docker_status:<15} {app.domain:<28}")
+
+    if show_core:
+        core_path = Path(CORE_DIR)
+        core_checkout = get_local_checkout_status(core_path)
+        core_dep_str = core_checkout.status_label
+        print()
+        if show_ssl:
+            print(f"{'CORE SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<22} {'STATUS':<15} {'DOMAIN':<28} {'CERT'}")
+            print(f"{'------------':<16} {'----------':<22} {'----------':<22} {'------':<15} {'------':<28} {'----'}")
+        else:
+            print(f"{'CORE SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<24} {'STATUS':<15} {'DOMAIN':<28}")
+            print(f"{'------------':<16} {'----------':<22} {'----------':<24} {'------':<15} {'------':<28}")
+
+        core_services = get_core_services()
+        for i, svc in enumerate(core_services):
+            row_dep = core_dep_str if i == 0 else ""
+            svc_docker = get_docker_status(core_path, container_name=svc.container)
+            if show_ssl:
+                cert_info = ssl_data.get(svc.domain, check_ssl_cert(svc.domain))
+                cert_badge = cert_info.get("status", "-")
+                print(f"{svc.name:<16} {row_dep:<22} {'— Core Platform':<22} {svc_docker:<15} {svc.domain:<28} {cert_badge}")
+            else:
+                print(f"{svc.name:<16} {row_dep:<22} {'— Core Platform':<24} {svc_docker:<15} {svc.domain:<28}")
+
+
+def cmd_info(args: list[str]) -> None:
+    """Show detailed two-axis diagnostics and metadata for a workload or Core service."""
+    clean_args = [a for a in args if not a.startswith("-")]
+    if not clean_args:
+        print("❌ Error: Service name required for 'info' command")
+        sys.exit(1)
+
+    show_ssl = any(a in ["--ssl", "-s"] for a in args)
+    query = clean_args[0]
+    app = resolve_app(query)
+
+    if not app:
+        print(f"❌ Error: Service '{query}' not found under {SITES_DIR} or Core.")
+        sys.exit(1)
+
+    if isinstance(app, CoreService):
+        print(f"ℹ️  Core Infrastructure Service: {app.name}")
+        print("-" * 50)
+        print(f"Directory:       {app.dir_path}")
+        print(f"Domain:          {app.domain}")
+        print(f"Container:       {app.container}")
+        print(f"Status:          {get_docker_status(Path(app.dir_path), app.container)}")
+        print(f"Description:     {app.description}")
+        return
+
+    # SitesApp
+    print(f"ℹ️  Workload Overview: {app.name}")
+    print("-" * 50)
+    print(f"Directory:       {app.dir_path}")
+    print(f"Domain:          {app.domain}")
+    print(f"Description:     {app.description}")
+    if app.aliases:
+        print(f"Aliases:         {', '.join(app.aliases)}")
+    print(f"Class:           {'Class A (Source-Backed)' if app.source else 'Class B (Image-Only)'}")
+    print(f"Networks:        {', '.join(app.networks)}")
+    print(f"Auth Protected:  {app.auth}")
+    print(f"Dashboard:       {'Visible' if app.visible else 'Hidden'}")
+
+    app_path = Path(app.dir_path)
+    manifest_file = app_path / "app.yaml"
+    if manifest_file.is_file():
+        try:
+            manifest_obj = parse_manifest(manifest_file)
+        except (ManifestValidationError, yaml.YAMLError, OSError, ValueError, KeyError):
+            manifest_obj = Manifest(name=app.name, domain=app.domain)
+    else:
+        manifest_obj = Manifest(name=app.name, domain=app.domain)
+
+    two_axis = inspect_workload_two_axis(
+        app_dir=app_path,
+        manifest=manifest_obj,
+        fetch_upstream=True,
+        docker_status=get_docker_status(app_path),
+        image_revision=get_docker_image_revision(app_path),
+    )
+
+    print("\n📦 Deployment Axis (Local State):")
+    print(f"  Git Repo:      {'Yes' if two_axis.checkout.is_git else 'No'}")
+    if two_axis.checkout.is_git:
+        print(f"  Branch:        {two_axis.checkout.branch}")
+        print(f"  Commit SHA:    {two_axis.checkout.commit_sha}")
+        print(f"  Checkout:      {'* Dirty (Uncommitted changes)' if two_axis.checkout.is_dirty else '✓ Clean'}")
+    print(f"  Docker Status: {two_axis.docker_status}")
+    if two_axis.image_revision:
+        print(f"  Image Revision:{two_axis.image_revision}")
+
+    print("\n🌐 Provenance Axis (Upstream):")
+    if app.source:
+        print(f"  Source URL:    {app.source.url}")
+        print(f"  Target Ref:    {app.source.ref}")
+        print(f"  Status:        {two_axis.provenance.status.value}")
+        print(f"  Details:       {two_axis.provenance.message}")
+    else:
+        print("  Source:        None (Image-Only workload)")
+        print(f"  Status:        {two_axis.provenance.status.value}")
+
+    if show_ssl and not app.is_internal:
+        cert_info = check_ssl_cert(app.domain)
+        print("\n🔒 SSL/TLS Certificate:")
+        print(f"  Status:        {cert_info['status']}")
+        print(f"  Issuer:        {cert_info['issuer']}")
+        print(f"  Expiration:    {cert_info['formatted_expiry']}")
+
+
+def cmd_resolve(args: list[str]) -> None:
+    """Resolve a workload or core service and emit JSON for scripts/appctl."""
+    if not args:
+        sys.exit(1)
+    app = resolve_app(args[0])
+    if not app:
+        sys.exit(1)
+    print(json.dumps(app.to_dict()))
+
+
+def cmd_ssl(args: list[str]) -> None:
+    """Check SSL/TLS certificates across services or for an individual service."""
+    targets = [a for a in args if not a.startswith("-")]
+    if targets:
+        for target in targets:
+            app = resolve_app(target)
+            if not app:
+                print(f"❌ Error: Service '{target}' not found in ~/Sites or Core.")
+                continue
+            if app.is_internal:
+                print(f"ℹ️  {app.name} ({app.domain}) is internal / no public TLS.")
+                continue
+
+            print(f"🔒 SSL/TLS Certificate: {app.name} ({app.domain})")
+            print("-" * 50)
+            cert_info = check_ssl_cert(app.domain)
+            print(f"Domain:          {cert_info['domain']}")
+            print(f"Status:          {cert_info['status']}")
+            print(f"Issuer:          {cert_info['issuer']}")
+            print(f"Subject:         {cert_info['subject']}")
+            print(f"Expiration:      {cert_info['not_after']}")
+            if cert_info["days_remaining"] is not None:
+                print(f"Days Remaining:  {cert_info['days_remaining']} days ({cert_info['formatted_expiry']})")
+            if cert_info["error"]:
+                print(f"Details/Error:   {cert_info['error']}")
+            print()
+        return
+
+    # Check all domains
+    apps = get_sites_apps()
+    services_to_check = [(app.name, app.domain) for app in apps if not app.is_internal]
+    for svc in get_core_services():
+        if not svc.is_internal:
+            services_to_check.append((f"{svc.name} (core)", svc.domain))
+
+    domains = [d for _, d in services_to_check]
+    print(f"🔒 Checking SSL/TLS certificates for {len(domains)} service(s)...")
+    ssl_results = check_all_ssl_certs(domains)
+
+    print(f"\n{'SERVICE':<20} {'DOMAIN':<30} {'STATUS':<24} {'ISSUER':<20} {'EXPIRES'}")
+    print(f"{'-------':<20} {'------':<30} {'------':<24} {'------':<20} {'-------'}")
+
+    for name, domain in services_to_check:
+        info = ssl_results.get(domain, check_ssl_cert(domain))
+        print(f"{name:<20} {domain:<30} {info['status']:<24} {info['issuer']:<20} {info['formatted_expiry']}")
+
+
+def cmd_complete(args: list[str]) -> None:
+    """Print autocompletion candidates for bash wrapper."""
+    words: set[str] = set()
+    for app in get_sites_apps():
+        words.add(app.name)
+        for a in app.aliases:
+            words.add(a)
+    for svc in get_core_services():
+        words.add(svc.name)
+    words.add("core")
+    print(" ".join(sorted(words)))
+
+
+def main() -> None:
     if len(sys.argv) < 2:
         sys.exit(1)
 
     command = sys.argv[1]
     args = sys.argv[2:]
 
-    if command == "list":
+    if command in ("list", "status"):
         cmd_list(args)
     elif command == "ssl":
         cmd_ssl(args)
