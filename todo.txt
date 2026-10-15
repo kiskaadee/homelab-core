@@ -17,9 +17,12 @@ x 2026-10-15 (A) Enforce deployments.yaml as sole registry and remove dynamic di
 x 2026-10-15 (A) Harden validate_compose_security in scripts/gitops_dispatcher.py blocking relative traversal, cross-tenant mounts, and privilege escalation +compose @gitops
 
 x 2026-10-15 (A) Unify manifest parsing on core_manifest.py and eliminate duplicate parsers in scripts/appctl_engine.py +manifest @engine
-(A) Scaffold asyncio daemon server supporting dual transports (Unix socket /run/homelab/appctl.sock and HTTP) in scripts/appctl_daemon.py +daemon @p4
+x 2026-10-15 (A) Codify Platform Genericism invariant in AGENTS.md and add Pydantic to flake.nix, pyproject.toml, and scripts/test +invariant @core
+(A) Migrate core_manifest.py to Pydantic v2 models for strict type validation and serialization +manifest @schema
+(A) Scaffold asyncio daemon server with Pydantic request/response models supporting dual transports in scripts/appctl_daemon.py +daemon @p4
 (A) Implement unit and integration tests for dual-transport requests and error handling in tests/unit/test_appctl_daemon.py +test @p4
 (B) Implement command-oriented operational router wiring domain actions to in-process appctl_engine.py methods and fixed subprocess executions +router @p4
+(B) Scrub hardcoded domain defaults across scripts and tests enforcing instance-agnostic parameterization +generic @core
 (B) Implement token authentication middleware validating user-scoped Bearer tokens for mutating requests +auth @p4
 (B) Implement append-only audit logger writing structured RFC JSONL records with fail-closed disk guard +audit @p4
 (C) Re-implement scripts/appctl as a thin client dispatching JSON requests to the daemon Unix domain socket +cli @p4

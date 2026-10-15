@@ -15,7 +15,7 @@ echo "🧪 Running architecture & security test suite (pytest)..."
 if command -v pytest &>/dev/null; then
     pytest tests/
 else
-    nix-shell -p python3Packages.pytest python3Packages.pyyaml --run "pytest tests/"
+    nix-shell -p python3Packages.pytest python3Packages.pyyaml python3Packages.pydantic --run "pytest tests/"
 fi
 
 echo "❄️  Verifying NixOS flake & sandbox checks..."

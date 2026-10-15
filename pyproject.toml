@@ -3,7 +3,10 @@ name = "homelab-core"
 version = "0.1.0"
 description = "Homelab Core platform and orchestration"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "pyyaml>=6.0",
+    "pydantic>=2.0",
+]
 
 [tool.pyright]
 extraPaths = ["scripts"]

@@ -1,6 +1,6 @@
 # 📋 Control Plane Milestone P4: Readiness Plan & Boundary Specifications
 
-**Status**: ✅ **Approved & Locked (Ready for P4 Daemon Implementation)**  
+**Status**: ✅ **Approved & Locked (Pre-P4 Security Gate Complete; Ready for Daemon Implementation)**  
 **Target Milestone**: [Milestone P4: Appctl Control Plane Daemon & API](../../ROADMAP.md#milestone-p4-appctl-control-plane-daemon--command-oriented-api)  
 **Governing ADR**: [`homelab-appctl-control-plane-architecture.md`](../decisions/README.md)  
 
@@ -10,11 +10,16 @@
 
 Before initiating code implementation for `homelab-appctl.service`, this readiness plan formalizes the operational contracts, execution boundaries, and security invariants that P4 depends upon. 
 
-Milestones P0–P3 established the core foundation:
+Milestones P0–P3 and the Pre-P4 Security Gate established the core foundation:
 - **P0**: Baseline consolidation & Pytest/Nix test harness.
 - **P1**: Zero-data-loss mail realignment & state isolation (`~/var/lib/homelab/snappymail`).
 - **P2**: GitOps repository registry (`deployments.yaml`), AST security validation, and Systemd sandboxing.
-- **P3**: Manifest Schema v1.0 ([`core_manifest.py`](../../scripts/core_manifest.py)), two-axis inspection ([`provenance.py`](../../scripts/provenance.py)), and promoted authoritative engine ([`appctl_engine.py`](../../scripts/appctl_engine.py)).
+- **P3**: Manifest Schema v1.0 ([`core_manifest.py`](../../scripts/core_manifest.py)), two-axis inspection ([`provenance.py`](../../scripts/provenance.py)), and authoritative engine ([`appctl_engine.py`](../../scripts/appctl_engine.py)).
+- **Pre-P4 Security Gate (Completed)**:
+  - Eliminated shell `eval` and unvalidated environment injection in `scripts/appctl`.
+  - Enforced `Core/config/deployments.yaml` as sole GitOps registry authority, removing dynamic host discovery.
+  - Hardened Compose AST validator against relative traversal, cross-tenant mounts, and host capability escapes.
+  - Unified manifest parsing on `core_manifest.py` and enforced fail-closed `cmd_resolve` behavior.
 
 This plan resolves the six architectural prerequisites necessary to implement P4 as a secure, fail-closed operational control plane rather than discovering boundaries ad-hoc during coding.
 
@@ -112,7 +117,12 @@ Every client (local CLI, remote CLI, GitOps dispatcher, and future Operations UI
    • platform.health
 ```
 
-### B. Typed Request and Response Models
+### B. Typed Request and Response Models (Pydantic v2 Validation Pipeline)
+
+All control plane API requests, responses, error payloads, and workload manifest schemas are defined and validated through **Pydantic v2** (`pydantic.BaseModel`, `pydantic.Field`, `ConfigDict(extra="forbid")`):
+- **Runtime Validation**: Incoming payloads over both Unix Domain Socket and HTTP endpoints are validated at the transport boundary before reaching the operational router.
+- **Fail-Closed Type Safety**: Unrecognized fields, malformed types, or invalid operations immediately fail validation with structured `ERR_VALIDATION_FAILED` (400) payloads.
+- **Contract Enforcement**: Manifest definitions in `core_manifest.py` migrate to Pydantic v2 models, guaranteeing uniform schema enforcement across the CLI, daemon, and GitOps engines.
 
 All requests and responses use strict JSON payloads with explicit schema versioning (`version: "1.0"`):
 
@@ -234,6 +244,12 @@ Following the pattern established in Milestone P2 for `homelab-gitops.service`, 
   - `/run/homelab` (socket runtime directory)
 - `PrivateTmp = true`: Isolated temporary directories.
 - `NoNewPrivileges = true`: Disallows privilege escalation.
+
+### C. Platform Genericism & Domain Decoupling
+Per Invariant #8 in `AGENTS.md`, the control plane and all platform components must remain strictly instance-agnostic:
+- **No Hardcoded Domains**: Personal domain names (e.g. `roadtotech.me`) must never appear hardcoded in Python modules, NixOS definitions, or default configurations.
+- **Dynamic Resolution**: Domains must resolve exclusively through `HOMELAB_DOMAIN`, `DOMAIN_SUFFIX`, or `DOMAIN` environment variables.
+- **Generic Fallbacks & Tests**: Test fixtures, documentation examples, and schema defaults must use RFC-reserved generic domains (`example.com`, `example.org`, `testdomain.local`).
 
 ---
 

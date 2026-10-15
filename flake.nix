@@ -31,6 +31,7 @@
           pyyaml
           types-pyyaml
           pytest
+          pydantic
         ]))
         pyright
         ruff
@@ -47,6 +48,7 @@
           python3
           python3Packages.pytest
           python3Packages.pyyaml
+          python3Packages.pydantic
           ruff
         ];
       } ''
