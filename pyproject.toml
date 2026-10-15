@@ -9,7 +9,8 @@ dependencies = [
 ]
 
 [tool.pyright]
+include = ["scripts"]
 extraPaths = ["scripts"]
-exclude = [
-    "scripts/appctl_engine.py",
-]
+venvPath = "."
+venv = ".venv"
+

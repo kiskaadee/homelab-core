@@ -120,16 +120,13 @@ class SitesApp(App):
         """Serialize for JSON consumption by scripts/appctl"""
         data = asdict(self)
         data.pop("manifest_obj", None)
-        if hasattr(self.source, "to_dict"):
-            data["source"] = self.source.to_dict()
-        elif hasattr(self.source, "model_dump"):
-            data["source"] = self.source.model_dump()
-        if hasattr(self.homepage, "to_dict"):
-            data["homepage"] = self.homepage.to_dict()
-        elif hasattr(self.homepage, "model_dump"):
-            data["homepage"] = self.homepage.model_dump()
+        if self.source is not None:
+            data["source"] = self.source.to_dict() if hasattr(self.source, "to_dict") else self.source.model_dump()
+        if self.homepage is not None:
+            data["homepage"] = self.homepage.to_dict() if hasattr(self.homepage, "to_dict") else self.homepage.model_dump()
         data["type"] = getattr(self, "app_type", "app")
         return data
+
 
 
 
@@ -488,7 +485,8 @@ def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[s
             socket.create_connection((domain, port), timeout=timeout) as sock,
             ctx.wrap_socket(sock, server_hostname=domain) as ssock,
         ):
-            cert = ssock.getpeercert() or {}
+            raw_cert = ssock.getpeercert()
+            cert = raw_cert if isinstance(raw_cert, dict) else {}
 
         not_after_str = str(cert.get("notAfter", ""))
         days_remaining = None
@@ -501,13 +499,26 @@ def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[s
             days_remaining = (expiry_dt - now_dt).days
             formatted_expiry = expiry_dt.strftime("%Y-%m-%d")
 
-        issuer_raw = cert.get("issuer", ())
-        issuer_dict = dict(x[0] for x in issuer_raw) if issuer_raw else {}
+        issuer_dict: dict[str, str] = {}
+        issuer_raw = cert.get("issuer")
+        if isinstance(issuer_raw, (list, tuple)):
+            for rdn in issuer_raw:
+                if isinstance(rdn, (list, tuple)) and rdn:
+                    entry = rdn[0]
+                    if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                        issuer_dict[str(entry[0])] = str(entry[1])
         issuer = str(issuer_dict.get("organizationName") or issuer_dict.get("commonName") or "Unknown")
 
-        subject_raw = cert.get("subject", ())
-        subject_dict = dict(x[0] for x in subject_raw) if subject_raw else {}
+        subject_dict: dict[str, str] = {}
+        subject_raw = cert.get("subject")
+        if isinstance(subject_raw, (list, tuple)):
+            for rdn in subject_raw:
+                if isinstance(rdn, (list, tuple)) and rdn:
+                    entry = rdn[0]
+                    if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                        subject_dict[str(entry[0])] = str(entry[1])
         subject = str(subject_dict.get("commonName") or domain)
+
 
         if days_remaining is not None:
             if days_remaining < 0:
@@ -768,8 +779,12 @@ def cmd_info(args: list[str]) -> None:
         print(f"Description:     {app.description}")
         return
 
+    if not isinstance(app, SitesApp):
+        return
+
     # SitesApp
     print(f"ℹ️  Workload Overview: {app.name}")
+
     print("-" * 50)
     print(f"Directory:       {app.dir_path}")
     print(f"Domain:          {app.domain}")

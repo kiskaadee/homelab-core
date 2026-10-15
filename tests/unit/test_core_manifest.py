@@ -12,6 +12,7 @@ CORE_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(CORE_ROOT / "scripts"))
 
 from core_manifest import (
+    Manifest,
     ManifestValidationError,
     RefType,
     TransportScheme,
@@ -22,6 +23,7 @@ from core_manifest import (
 
 
 def test_validate_transport_https():
+
     scheme, url = validate_transport("https://git.example.com/operator/homelab-snappymail.git")
     assert scheme == TransportScheme.HTTPS
     assert url == "https://git.example.com/operator/homelab-snappymail.git"
@@ -250,7 +252,9 @@ domain: "app.example.test"
 description: "Pydantic serialization test"
 """
     manifest = parse_manifest(raw_yaml)
+    assert isinstance(manifest, Manifest)
     assert isinstance(manifest, BaseModel)
+
     dumped = manifest.model_dump(by_alias=True)
     assert dumped["name"] == "serialized-app"
     assert dumped["schemaVersion"] == "1.0"
