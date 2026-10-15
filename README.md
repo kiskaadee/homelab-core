@@ -1,96 +1,19 @@
-# 🏛️ Homelab Core & Appctl Operational Control Plane
+# Homelab Core
 
-**Homelab Core** defines the host foundation, platform infrastructure services, security boundaries, and operational control plane for the `roadtotech.me` homelab appliance.
+**Homelab Core** is the declarative NixOS host foundation, shared platform infrastructure stack, and `appctl` operational control plane for a self-hosted homelab appliance.
 
-This repository serves two primary roles:
-1. **The Host Platform & Infrastructure Appliance**: Declarative NixOS operating system definitions, edge ingress routing, wildcard TLS certificates, identity/SSO directory services, mail routing, and Docker socket isolation.
-2. **The Appctl Operational Control Plane**: The centralized engine governing workload lifecycle management, continuous GitOps deployment, source provenance tracking, and dashboard synchronization across independent application workloads in `~/Sites`.
+It is designed around a strict two-tier boundary:
+1. **Homelab Core (this repository)**: Owns NixOS operating system configuration, edge TLS ingress, SSO/LDAP directory identity, mail routing, read-only Docker socket isolation, and orchestration/deployment mechanics.
+2. **Workload Repositories (`~/Sites/<app>`)**: Independently deployed application stacks that integrate with Core through self-describing `app.yaml` manifests and workload-scoped `docker-compose.yml` definitions.
 
----
+All platform definitions are strictly instance-agnostic; domain names (`HOMELAB_DOMAIN`) and secrets (`/run/secrets/`) are injected declaratively at runtime.
 
-## 🧭 Architectural Direction & Mental Model
-
-Under the approved architectural baseline ([`ADR: Homelab Operational Control Plane`](docs/decisions/README.md#homelab-operational-control-plane--deployment-model-architecture) and [`ADR: 3-Tier Architecture & Provenance`](docs/decisions/README.md#homelab-3-tier-architecture--deployment-provenance-model)), `appctl` is evolving from a local procedural CLI wrapper into the **authoritative operational control plane service for Homelab Core**.
-
-### The Core Architectural Spine
-
-```text
-                        Human Operator / Automation
-                                     │
-                 ┌───────────────────┴───────────────────┐
-                 │                                       │
-           Operations UI                                CLI (Local & Remote)
-                 │                                       │
-                 └───────────────────┬───────────────────┘
-                                     │
-                             appctl Control Plane API
-                       (One Logical API across Transports)
-                                     │
-                        ┌────────────┴────────────┐
-                        │                         │
-                   Unix Socket               HTTP Listener
-                  (Host Clients)            (Remote/LAN Clients)
-                        │                         │
-                        └────────────┬────────────┘
-                                     │
-         ┌───────────────────────────┼───────────────────────────┐
-         │                           │                           │
-    Authentication             Deployment Model              Operations
-    & Authorization                  Plane                     Execution
-         │                           │                           │
-  Token Validation &          ┌──────┴──────┐              Docker Compose
-  LLDAP Directory RBAC        │             │              Traefik Routing
-                       AI Investigation   Human            Host Secrets
-                              │          Approval          Reconciliation
-                              ▼             │
-                      DeploymentProposal    │
-                              │             ▼
-                              └─────▶ DeploymentModel
-                                            │
-                                            ▼ (Committed to Git)
-                                  Deployment Repository
-                                       (Git Truth)
-                                            │
-                                            ▼ (appctl validates & materializes)
-                                  Deployment Definition
-                               (Sites app.yaml + compose)
-                                            │
-                                            ▼
-                                   Runtime Reconciliation
-```
-
-### Core Architectural Invariants
-
-* **Single Operational Truth**: Exactly one implementation of every operational action (`deploy`, `restart`, `inspect`, `sync`, `validate`) exists in the platform. Clients (local CLI, remote CLI, web UI, GitOps) invoke the exact same logical API contract.
-* **Host Access Does Not Confer Authority**: Entering the server via SSH is merely host access; it does not grant Appctl privileges. **Every mutating operation requires an explicit, authenticated user-scoped token**, regardless of transport. Unix socket peer credentials identify the transport context, not user authority.
-* **Git is the Authoritative Source of Deployment State**: Approved workload configurations are versioned in Git. `appctl` reconciles desired Git state into running containers, preserving immutable revision history, commit provenance, peer reviews, and atomic rollbacks (`git revert`).
-* **Five-Stage Model Lifecycle (Intent vs. Implementation)**:
-  $$\text{Repository} \xrightarrow{\text{Investigation}} \text{Application Profile} \xrightarrow{\text{Proposal}} \text{DeploymentProposal} \xrightarrow{\text{Human Selection}} \text{DeploymentModel (Git)} \xrightarrow{\text{appctl Materialize}} \text{Deployment Definition} \xrightarrow{\text{Reconcile}} \text{Containers}$$
-  * `DeploymentModel`: The operator-selected, implementation-agnostic representation of intent (ports, domains, volumes, dependencies, secret references). Free of Compose syntax and Traefik label boilerplate.
-  * `Deployment Definition`: Concrete platform descriptors (`app.yaml` + `docker-compose.yml`) materialized and enforced by `appctl`.
-* **AI Authoring Boundary**: AI agents act strictly as upstream proposal generators with **zero execution or mutation authority**. The AI analyzes repositories and drafts `DeploymentProposals`. After human approval into a `DeploymentModel`, the AI is completely out of the loop.
-* **Secret Reference Invariant**: Deployment definitions contain secret references (`secretKeyRef`), never secret material. References are resolved at runtime through a defined `SecretProvider` interface. Host platform secrets remain declarative in `sops-nix`.
-* **Clean State Root**: Mutable application data lives strictly under `~/var/lib/homelab/<app>/`, isolated from Git deployment repositories.
+> [!NOTE]
+> **Current Implementation Baseline vs. Target Architecture**: This README documents the **currently implemented CLI and runtime baseline (Milestone P3)**. Under [Milestone P4 in `ROADMAP.md`](ROADMAP.md), `appctl` is transitioning from a host CLI orchestrator into a dedicated daemon service (`homelab-appctl.service`) exposing a unified logical API across local Unix socket and HTTP transports. See [`ROADMAP.md`](ROADMAP.md) for the full baseline-to-target matrix.
 
 ---
 
-## 🔍 Current Implementation Baseline vs. Target Architecture
-
-To maintain clarity during development, this repository explicitly separates what is **currently implemented** from what is **planned in the roadmap**:
-
-| Architectural Area | Current Implementation Baseline (Milestone P0) | Target Architecture (Roadmap v5) |
-| :--- | :--- | :--- |
-| **`appctl` Architecture** | Bash CLI wrapper (`scripts/appctl`) driving local subprocesses (`docker compose`, `git`) and metadata engines. | Dedicated daemon service (`homelab-appctl.service`) exposing one logical API over Unix socket and HTTP. |
-| **Operational Auth** | Sudo / Unix user permissions on the host. Sourcing secrets from `/run/secrets/`. | LLDAP directory identity. Explicit user-scoped API tokens for all mutating actions; Authelia ForwardAuth for Web. |
-| **Metadata Engine** | Authoritative dataclass engine (`scripts/appctl_engine.py`) with two-axis inspection and schema v1.0 parser (`core_manifest.py`). | Single unified engine (`core_manifest.py` / `appctl_engine.py`) embedded directly within the control plane daemon. |
-| **Deployment Model** | Manual authoring of `app.yaml` and `docker-compose.yml` directly in `~/Sites/<app>/`. | 5-stage lifecycle: AI/human `DeploymentProposal` $\to$ operator-approved `DeploymentModel` committed to Git $\to$ `appctl` materialization. |
-| **GitOps Engine** | Webhook dispatcher (`scripts/gitops_dispatcher.py`) listening on port 9000 with HMAC-SHA256 authentication and flock serialization. | Fully integrated into control-plane admission, calling central reconciliation endpoints. |
-| **Secret Distribution** | Static Age-encrypted `nixos/secrets.yaml` decrypted by `sops-nix` to tmpfs `/run/secrets/`. | Host secrets remain in `sops-nix`; workload secrets referenced by key and projected at runtime via `SecretProvider`. |
-| **Dashboard** | `appctl sync` statically compiles `config/homepage/services.yaml`. | Homepage consumes read-only live status from `appctl`; dedicated Operations UI client for interactive management. |
-
----
-
-## 🗺️ System Topology & Runtime Layers
+## System Architecture at a Glance
 
 ```text
                                  Internet
@@ -98,129 +21,149 @@ To maintain clarity during development, this repository explicitly separates wha
                                     ▼
                     ┌───────────────────────────────┐
                     │   Traefik Edge Proxy (:443)   │
-                    │  Wildcard TLS (*.roadtotech.me)│
+                    │  Wildcard TLS (*.example.com) │
                     └───────┬───────────────┬───────┘
                             │               │
       Public Traffic        │               │ ForwardAuth Protected
-      (e.g., mail, landing) │               │ (authelia-auth@docker)
+      (e.g., SMTP, public)  │               │ (authelia-auth@docker)
                             ▼               ▼
                     [ Public Services ]  [ Authelia SSO / 2FA ]
                             │               │ (LDAP -> LLDAP)
-                            │               │
                             ▼               ▼
                     ┌───────────────────────────────┐
-                    │      Docker proxy-net         │
+                    │       Docker proxy-net        │
                     ├───────────────────────────────┤
                     │ • Core Services (Homepage,    │
-                    │   Dozzle, etc.)               │
+                    │   Dozzle, Stalwart, etc.)     │
                     │ • Workload Apps (~/Sites/*)   │
-                    └───────────────────────────────┘
-                                    │
-                     (Protected API via TCP:2375)
+                    └───────────────┬───────────────┘
+                                    │ (Read-Only API via TCP:2375)
                                     ▼
                     ┌───────────────────────────────┐
-                    │   Docker socket-proxy         │
-                    │   (socket-net, Read-Only)     │
+                    │      Docker socket-proxy      │
+                    │    (socket-net, Read-Only)    │
                     └───────────────┬───────────────┘
-                                    │ (read-only mount)
+                                    │ (read-only mount :ro)
                                     ▼
                         /var/run/docker.sock
+                                    ▲
+                                    │ (Host Orchestration & CD)
+                    ┌───────────────┴───────────────┐
+                    │  Host Control Plane Baseline  │
+                    │  • appctl CLI + Engine        │
+                    │  • homelab-gitops.service     │
+                    └───────────────────────────────┘
 ```
 
-### Core Services (`docker-compose.yml`)
-| Service | Domain / Ingress | Function | Auth Policy |
+For detailed runtime layers, network segmentation, and the P4 control-plane transport architecture, see [`docs/architecture.md`](docs/architecture.md) and [`ROADMAP.md`](ROADMAP.md).
+
+### Core Platform Services (`docker-compose.yml`)
+
+| Service | Default Endpoint | Role | Access Policy |
 | :--- | :--- | :--- | :--- |
-| **`traefik`** | `traefik.roadtotech.me` | Edge reverse proxy, Dynu DNS-01 ACME TLS | Authelia Guard |
-| **`socket-proxy`** | Internal (`socket-net:2375`) | Read-only Docker API gateway barrier | Internal Only |
-| **`lldap`** | `users.roadtotech.me` | LDAP directory & user database | Authelia Guard |
-| **`authelia`** | `auth.roadtotech.me` | Single Sign-On (SSO) & ForwardAuth middleware | Public (Bypass) |
-| **`stalwart`** | `mail.roadtotech.me` | Mail Server (SMTP/IMAP/JMAP/Sieve) *(Moving to smtp in P1)* | Native / LLDAP |
-| **`homepage`** | `dashboard.roadtotech.me` | Service portal & system dashboard | Authelia Guard |
-| **`dozzle`** | `logs.roadtotech.me` | Container log viewer (via socket-proxy) | Authelia Guard |
+| **`traefik`** | `traefik.${HOMELAB_DOMAIN}` | Edge reverse proxy & DNS-01 ACME wildcard TLS | Authelia Guard |
+| **`socket-proxy`** | Internal (`socket-net:2375`) | Read-only Docker API security barrier (`POST=0`, `DELETE=0`) | Internal Only |
+| **`lldap`** | `users.${HOMELAB_DOMAIN}` | Central LDAP user directory | Authelia Guard |
+| **`authelia`** | `auth.${HOMELAB_DOMAIN}` | Single Sign-On (SSO), 2FA & ForwardAuth | Public (Auth Endpoint) |
+| **`stalwart`** | `smtp.${HOMELAB_DOMAIN}` | Mail server (SMTP/IMAP/JMAP/Sieve) | Native / LLDAP |
+| **`homepage`** | `dashboard.${HOMELAB_DOMAIN}` | Service portal dynamically synced via `appctl` | Authelia Guard |
+| **`dozzle`** | `logs.${HOMELAB_DOMAIN}` | Real-time container log viewer (via `socket-proxy`) | Authelia Guard |
 | **`watchtower`** | Internal | Automated container image updater | Internal Only |
 | **`diun`** | Internal | Container image update notifier | Internal Only |
 
 ---
 
-## ⚡ Quick Start & Operator Workflows (Current Baseline)
+## Repository Structure
 
-### Host & System Operations
+```text
+.
+├── flake.nix                  # NixOS host configuration, devShell (.venv symlink), and CI checks
+├── docker-compose.yml         # Core platform service stack
+├── nixos/                     # Declarative NixOS modules, systemd units, and SOPS secret wiring
+├── config/                    # Service configurations (Traefik, Authelia, Homepage, deployments.yaml)
+├── scripts/
+│   ├── appctl                 # Operational CLI entrypoint and Compose environment orchestrator
+│   ├── appctl_engine.py       # Discovery, two-axis provenance, TLS inspection, and Homepage sync engine
+│   ├── core_manifest.py       # Authoritative Pydantic v2 schema v1.0 parser for workload app.yaml
+│   ├── gitops_dispatcher.py   # Authenticated webhook CD engine with Compose AST security validation
+│   └── test                   # Automated verification gate (Ruff, Pyright, Pytest, Nix flake checks)
+├── tests/                     # Unit, structural, and security invariant test suites
+└── docs/                      # Architecture references, operational runbooks, and MADR decisions
+```
+
+---
+
+## Quickstart & Operations (Current CLI Baseline)
+
+### Development & Verification
+
+Entering the directory via `direnv` (`use flake`) or `nix develop` provisions the hermetic Nix Python environment and symlinks `.venv` for IDE static analysis:
+
 ```bash
-# Rebuild and switch NixOS configuration
-sudo nixos-rebuild switch --flake ~/Core#server
-# or use the built-in shell alias:
-nix-switch
+# Run full automated verification (Ruff + Pyright + Pytest + nix flake check + NixOS drv eval)
+./scripts/test
 
-# Inspect systemd platform services
-systemctl status homeserver-core.service   # Core Compose stack
-systemctl status homelab-gitops.service     # GitOps webhook engine
-systemctl status dynu-monitor.service       # Smart DDNS IP monitor
-systemctl status dynu-monitor.timer         # DDNS timer (every 30m)
+# Run individual checks directly
+ruff check .
+pyright
+.venv/bin/pytest tests/
 ```
 
 ### Workload Management (`appctl` CLI)
+
 ```bash
-# List all application stacks with container health, Git tracking, and provenance status
+# List all workloads with container health and local Git checkout status
 appctl list
 
-# Fetch upstream changes across all repos and inspect with SSL certificates
+# Include upstream Git provenance (--fetch), TLS certificate expiry (--ssl), and Core services (--core)
 appctl list --fetch --ssl --core
 
-# Inspect full diagnostic metadata for a service
-appctl info jellyfin
+# Inspect detailed manifest, provenance, and container diagnostics for a workload
+appctl info <service>
 
-# Start, stop, or restart an application or Core service
-appctl up docs
-appctl down mongodb
-appctl restart traefik
+# Manage workload or Core service lifecycle (executes docker compose locally in the current baseline)
+appctl up <service|core>
+appctl down <service|core>
+appctl restart <service|core>
 
-# Sequential stack update (clean working tree check -> git pull -> compose pull -> up -> sync)
-appctl update docs
-appctl update core
+# Full stack update (clean tree check -> git pull --ff-only -> compose pull -> recreate -> sync)
+appctl update <service|core>
 
-# Recompile Homepage services.yaml from active app.yaml manifests
+# Recompile Homepage dashboard configuration from discovered app.yaml manifests
 appctl sync
 ```
 
-### Testing & Verification
-```bash
-# Run the complete test suite (Ruff linter + Pytest invariants + Nix flake check)
-./scripts/test
+### Host System Management
 
-# Run pure Nix flake evaluation and checks
-nix flake check
+```bash
+# Rebuild and activate the NixOS host configuration
+sudo nixos-rebuild switch --flake .#server
+
+# Inspect platform systemd units
+systemctl status homeserver-core.service
+systemctl status homelab-gitops.service
+systemctl status dynu-monitor.service
 ```
 
 ---
 
-## 📚 Documentation Navigation & Ownership
+## Documentation Index
 
-| Document | Ownership & Epistemic Role |
+| Document | Scope |
 | :--- | :--- |
-| [**`ROADMAP.md`**](ROADMAP.md) | **Implementation Trajectory**: Phased milestones (P0 through P7), active status, and deliverables based on Roadmap v5. |
-| [**ADR Index**](docs/decisions/README.md) | **Architectural Decisions**: Navigation index to authoritative ADRs governing the control plane and 3-tier provenance. |
-| [**Architecture Reference**](docs/architecture.md) | **Runtime Architecture**: Deep-dive into runtime layers, network segmentation, and component boundaries. |
-| [**Appctl Reference**](docs/appctl.md) | **Current CLI Implementation**: Command syntax, arguments, resolution rules, and `app.yaml` fields consumed today. |
-| [**GitOps Engine**](docs/gitops.md) | **Current CD Implementation**: Webhook admission pipeline, HMAC verification, and lock serialization. |
-| [**Secrets & State**](docs/secrets-and-state.md) | **Current Runtime Secrets**: SOPS encryption, tmpfs projections, and persistent state roots. |
-| [**Operator Runbook**](docs/operations.md) | **Operational Runbook**: Host maintenance, updates, garbage collection, and recovery procedures. |
-| [**Setup & Provisioning**](docs/setup_guide.md) | **Host Provisioning**: Bare-metal NixOS installation and platform bootstrapping. |
-| [**Agent Guidelines**](AGENTS.md) | **Agent Invariants**: Hard rules, trust boundaries, Core/Sites boundaries, and testing rules. |
-| [**Security Policy**](SECURITY.md) | **Security Controls**: Docker socket isolation, threat models, and hardening checklists. |
+| [**`docs/architecture.md`**](docs/architecture.md) | Runtime layers, network segmentation, and Core / `~/Sites` boundaries. |
+| [**`docs/decisions/README.md`**](docs/decisions/README.md) | Architecture Decision Records (MADR 4.0) governing platform evolution. |
+| [**`ROADMAP.md`**](ROADMAP.md) | Phased engineering milestones (P0–P7) and baseline-to-target architecture matrix. |
+| [**`docs/appctl.md`**](docs/appctl.md) | Current `appctl` CLI commands, resolution hierarchy, and `app.yaml` schema v1.0 contract. |
+| [**`docs/gitops.md`**](docs/gitops.md) | Webhook admission pipeline, HMAC verification, Compose AST validation, and locking. |
+| [**`docs/secrets-and-state.md`**](docs/secrets-and-state.md) | SOPS secret management, `/run/secrets/` projections, and persistent state paths. |
+| [**`docs/operations.md`**](docs/operations.md) | Day-2 operational runbook, updates, backups, and recovery procedures. |
+| [**`docs/setup_guide.md`**](docs/setup_guide.md) | Bare-metal NixOS installation and host bootstrapping guide. |
+| [**`SECURITY.md`**](SECURITY.md) | Security controls, Docker socket isolation, and threat model. |
+| [**`AGENTS.md`**](AGENTS.md) | Architectural invariants, TDD rules, and verification gates for contributors and agents. |
 
 ---
 
-## 🧠 Governance & Knowledge Architecture
-
-Durable architectural decisions, exploratory design trade-offs, and master execution roadmaps are governed in the operator's central knowledge vault under standard epistemic taxonomy:
-* **Architectural Decisions**: Captured in MADR 4.0 format under `03-records/decisions/`.
-* **Execution Roadmaps**: Phased engineering blueprints under `01-plans/`.
-* **System Discussions**: Exploratory trade-off analyses under `02-discussions/`.
-
-The repository documentation reflects the accepted architectural state and serves as the operational guide for the implementation.
-
----
-
-## 📄 License
+## License
 
 This repository is released into the public domain under [The Unlicense](UNLICENSE).

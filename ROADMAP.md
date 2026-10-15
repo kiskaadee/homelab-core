@@ -4,11 +4,7 @@ This document serves as the repository-facing projection of the authoritative **
 
 It describes the implementation trajectory and phased engineering milestones for transitioning Homelab Core into a unified platform driven by the `appctl` Operational Control Plane.
 
-> **Authoritative Master Roadmap**: `01-plans/homelab/consolidation/architecture-consolidation-roadmap-v5.md` in the central knowledge vault.
->
-> **Governing Architectural Decisions**:
-> - `homelab-appctl-control-plane-architecture.md` (Operational Control Plane & Deployment Model)
-> - `homelab-3tier-architecture-and-provenance.md` (3-Tier Architecture & Provenance)
+> **Governing Architectural Decisions**: See [`docs/decisions/README.md`](docs/decisions/README.md) for the authoritative ADR index (Control Plane Architecture, 3-Tier Provenance Model, and Pydantic v2 Runtime Validation).
 
 ---
 
@@ -24,16 +20,30 @@ It describes the implementation trajectory and phased engineering milestones for
 
 ---
 
+## 🔍 Current Implementation Baseline vs. Target Architecture
+
+| Architectural Area | Current Implementation Baseline (Milestone P3) | Target Architecture (Roadmap v5) |
+| :--- | :--- | :--- |
+| **`appctl` Architecture** | Bash CLI wrapper (`scripts/appctl`) driving local subprocesses (`docker compose`, `git`) and Python engine. | Dedicated daemon service (`homelab-appctl.service`) exposing one logical API over Unix socket and HTTP. |
+| **Operational Auth** | Host Unix permissions; sourcing runtime secrets from `/run/secrets/`. | Mandatory auth middleware in daemon (P4 admission gate); LLDAP directory RBAC, user-scoped API tokens, and Authelia ForwardAuth (P5). |
+| **Metadata & Schema Engine** | Unified engine (`scripts/appctl_engine.py`) with two-axis provenance and fail-closed Pydantic v2 schema v1.0 parser (`scripts/core_manifest.py`). | Control-plane daemon invokes `core_manifest.py` / `appctl_engine.py` through a stable internal Python interface. |
+| **Deployment Model** | Direct authoring of `app.yaml` and `docker-compose.yml` in `~/Sites/<app>/`. | 5-stage lifecycle (planned in P6): `DeploymentProposal` $\to$ operator-approved `DeploymentModel` in Git $\to$ `appctl` materialization. |
+| **GitOps Engine** | Webhook dispatcher (`scripts/gitops_dispatcher.py`) with HMAC-SHA256 auth, Compose AST security validator, and `flock` serialization. | Integrated into control-plane admission, invoking central reconciliation endpoints. |
+| **Secret Distribution** | Age-encrypted `nixos/secrets.yaml` decrypted by `sops-nix` to tmpfs `/run/secrets/`. | Host secrets remain in `sops-nix`; workload secrets referenced by key and projected via `SecretProvider` (planned in P5). |
+| **Dashboard** | `appctl sync` compiles `config/homepage/services.yaml` from `app.yaml` manifests. | Homepage consumes read-only live status from `appctl`; dedicated Operations UI client for management (planned in P7). |
+
+---
+
 ## 📊 Milestone Overview
 
 | Milestone | Title | Focus Area | Status | Deliverables Summary |
 | :--- | :--- | :--- | :--- | :--- |
 | **P0** | **Baseline Consolidation** | Git & Architecture | ✅ **Completed** | Synchronized `refactor/appctl-rework` with `main`, recorded control plane ADR, scaffolded v2 metadata engine. |
-| **P1** | **Mail Topology Realignment** | Topology & State | ✅ **Completed** | Move Stalwart to `smtp.roadtotech.me`; migrate SnappyMail to `~/Sites/snappymail` with zero data loss. |
+| **P1** | **Mail Topology Realignment** | Topology & State | ✅ **Completed** | Re-homed Stalwart to the dedicated `smtp.` subdomain; migrated SnappyMail to `~/Sites/snappymail` with zero data loss. |
 | **P2** | **GitOps Hardening** | Ingress Security | ✅ **Completed** | Authoritative Core repository registry (`deployments.yaml`), Compose AST security validator, systemd sandboxing. |
-| **P3** | **Manifest Contract** | Domain Engine | ✅ **Completed** | Schema v1.0, authoritative `core_manifest.py` library, two-axis status inspection, engine promotion. |
-| **P4** | **Control Plane Daemon** | API & Dispatch | 🎯 **Current / Up Next** | `homelab-appctl.service` daemon, dual transports (socket + HTTP), thin-client CLI, append-only audit log. |
-| **P5** | **Identity & Secrets** | Auth & Providers | ⏳ **Planned** | ForwardAuth header parsing, user-scoped API tokens, `SecretProvider` reference resolution. |
+| **P3** | **Manifest Contract** | Domain Engine | ✅ **Completed** | Schema v1.0 with Pydantic v2 fail-closed models (`core_manifest.py`), two-axis status inspection, unified `appctl_engine.py`. |
+| **P4** | **Control Plane Daemon** | API & Dispatch | 🎯 **Current / Up Next** | `homelab-appctl.service` daemon, dual transports (socket + HTTP), mandatory auth admission gate, thin-client CLI, append-only audit log. |
+| **P5** | **Identity & Secrets** | Auth & Providers | ⏳ **Planned** | LLDAP RBAC group mapping, Authelia ForwardAuth header integration, user-scoped token lifecycle, `SecretProvider` reference resolution. |
 | **P6** | **Deployment Model & AI**| Intent Authoring | ⏳ **Planned** | Capability catalog, `DeploymentProposal` $\to$ `DeploymentModel` compiler, Git commit pipeline. |
 | **P7** | **Operations UI & Portal** | Client Integration | ⏳ **Planned** | Dedicated Operations UI client, Homepage read-only status integration widgets. |
 
@@ -44,9 +54,9 @@ It describes the implementation trajectory and phased engineering milestones for
 ### Milestone P0: Baseline Consolidation
 **Status**: ✅ **Completed**
 * Merged `refactor/appctl-rework` and `main` into a unified architectural baseline (commit `2297cd5`).
-* Modernized metadata engine (`scripts/appctl_engine_v2.py`) with strongly-typed dataclasses (`SitesApp`, `CoreService`, `SourceConfig`) and Docker status inspection.
-* Formalized the control-plane ADR and Roadmap v5 in the central knowledge vault; marked legacy roadmaps as superseded.
-* Verified test suite (47 tests passing) and NixOS flake sandbox evaluation.
+* Modernized metadata engine with strongly-typed models (`SitesApp`, `CoreService`, `SourceConfig`) and Docker status inspection.
+* Formalized the control-plane ADR and Roadmap v5; marked legacy roadmaps as superseded.
+* Verified test suite and NixOS flake sandbox evaluation.
 
 ---
 
@@ -57,8 +67,8 @@ It describes the implementation trajectory and phased engineering milestones for
   1. *State Freeze & Verified Snapshot*: Generate timestamped, SHA256-verified backup archive of `Core/config/snappymail/data`.
   2. *Workload Provisioning*: Scaffold `~/Sites/snappymail/` (Class B Image-Only workload) and provision persistent state root at `~/var/lib/homelab/snappymail/`.
   3. *Zero-Data-Loss State Replication*: Copy data using `cp -a` and prove byte parity (`diff -r`).
-  4. *Stalwart Re-homing*: Update Stalwart public endpoint in `Core/docker-compose.yml` to `smtp.roadtotech.me`; remove SnappyMail from Core stack.
-  5. *Live Verification*: Verify webmail at `mail.roadtotech.me`, user logins, address books, IMAP/SMTP routing, and Diun SMTPS delivery on port 465.
+  4. *Stalwart Re-homing*: Updated Stalwart public endpoint in `Core/docker-compose.yml` to the configured `smtp.<domain>` subdomain; removed SnappyMail from Core stack.
+  5. *Live Verification*: Verified webmail at the configured `mail.<domain>` endpoint, user logins, address books, IMAP/SMTP routing, and Diun SMTPS delivery on port 465.
 * **Exit Criteria**: 100% of user data survives cutover; mail flow and Diun alert delivery confirmed.
 
 ---
@@ -79,31 +89,32 @@ It describes the implementation trajectory and phased engineering milestones for
 **Status**: ✅ **Completed**
 * **Objective**: Establish a single authoritative manifest schema and two-axis inspection engine across the platform.
 * **Key Deliverables**:
-  1. *Schema v1.0 & Parser Library (`core_manifest.py`)*: Strongly-typed manifest parsing, transport scheme validation (`https://`, `ssh://`, `git@`), and explicit ref semantics (moving branches vs. pinned tags vs. commit SHAs).
+  1. *Schema v1.0 & Parser Library (`core_manifest.py`)*: Fail-closed Pydantic v2 manifest validation (`ConfigDict(extra="forbid")`), transport scheme validation (`https://`, `ssh://`, `git@`), and explicit ref semantics (moving branches vs. pinned tags vs. commit SHAs).
   2. *Two-Axis Inspection*: Local deployment checkout state (`✓ Synced`, `* Dirty`) evaluated independently of upstream software provenance (resolved via `git ls-remote` bounded by a 10s timeout during `--fetch`).
-  3. *Engine Promotion*: Promote `scripts/appctl_engine_v2.py` to `scripts/appctl_engine.py` with complete behavioral test coverage.
+  3. *Engine Promotion & Cleanup*: Promoted unified engine to `scripts/appctl_engine.py`, retired `scripts/appctl_engine_v2.py` shim, and achieved zero Pyright static analysis warnings.
 * **Exit Criteria**: Manifest validation active in CI; all provenance resolution tests passing.
 
 ---
 
 ### Milestone P4: Appctl Control Plane Daemon & Command-Oriented API
 **Status**: 🎯 **Current / Up Next**
-* **Objective**: Evolve `appctl` from a collection of local shell scripts into the authoritative platform daemon.
+* **Objective**: Evolve `appctl` from a collection of local shell scripts into the authoritative platform daemon while enforcing authorization gates from day one.
 * **Key Deliverables**:
   1. *Daemon Service (`homelab-appctl.service`)*: Systemd daemon exposing one logical API across dual transports: Unix domain socket (`/run/homelab/appctl.sock`) on host and HTTP listener for network clients.
-  2. *Command-Oriented Operational Router*: Strongly-typed endpoints (`POST /operations/deploy`, `POST /operations/restart`, `POST /operations/pull`, `GET /workloads`, `GET /workloads/{id}/status`, `POST /operations/sync`).
-  3. *Thin-Client CLI*: Re-implement `scripts/appctl` as a lightweight dispatch client communicating with the local daemon socket.
-  4. *Append-Only Audit Log*: Record every mutating command to `~/.local/state/homelab/appctl/audit.jsonl` with restricted `0600` permissions. Telemetry captures `principal`, `action`, `target`, `transport`, `origin`, `client`, `timestamp`, and `result`.
-* **Exit Criteria**: Hermetic API test suite passing; local socket and HTTP transport tests passing; audit log correctly capturing multi-dimensional telemetry.
+  2. *Mandatory Authorization Gate*: Establish the authentication/authorization middleware interface before exposing mutating routes; reject unauthenticated mutations across both Unix socket and HTTP transports.
+  3. *Command-Oriented Operational Router*: Strongly-typed endpoints (`POST /operations/deploy`, `POST /operations/restart`, `POST /operations/pull`, `GET /workloads`, `GET /workloads/{id}/status`, `POST /operations/sync`) invoking `core_manifest.py` and `appctl_engine.py` via internal interfaces.
+  4. *Thin-Client CLI*: Re-implement `scripts/appctl` as a lightweight dispatch client communicating with the local daemon socket.
+  5. *Append-Only Audit Log*: Record every mutating command to `~/.local/state/homelab/appctl/audit.jsonl` with restricted `0600` permissions. Telemetry captures `principal`, `action`, `target`, `transport`, `origin`, `client`, `timestamp`, and `result`.
+* **Exit Criteria**: Hermetic API test suite passing; unauthenticated mutation attempts rejected across both transports; audit log capturing multi-dimensional telemetry.
 
 ---
 
 ### Milestone P5: Identity, RBAC & SecretProvider Interface
 **Status**: ⏳ **Planned**
-* **Objective**: Implement least-privilege identity boundaries and dynamic secret projection.
+* **Objective**: Expand the P4 authorization gate with directory-backed RBAC identity providers and dynamic secret projection.
 * **Key Deliverables**:
-  1. *Authentication Gateway*: Accept trusted identity headers from Traefik/Authelia (`Remote-User`, `Remote-Groups`) for web requests; validate explicit user-scoped API tokens for all CLI requests (local and remote); validate HMAC signatures for GitOps webhooks.
-  2. *Role-Based Authorization Engine*: Enforce group-based access control (`homelab-admin`, `homelab-operator`, `homelab-viewer`).
+  1. *Identity Provider Integration*: Plug Traefik/Authelia trusted headers (`Remote-User`, `Remote-Groups`) for web requests, LLDAP user-scoped API token lifecycle for CLI requests, and HMAC-SHA256 verification for GitOps webhooks into the P4 authorization middleware.
+  2. *Role-Based Authorization Engine*: Enforce LLDAP group-based access control (`homelab-admin`, `homelab-operator`, `homelab-viewer`).
   3. *SecretProvider Interface*: Control plane resolves secret references (`secretKeyRef`) at container runtime, eliminating Git history pollution for workload credentials.
 * **Exit Criteria**: RBAC permission matrix verified by automated tests; secret references correctly materialized into runtime environments.
 
