@@ -8,6 +8,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE="$SCRIPT_DIR/appctl_engine.py"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 ENV_FILE="/run/secrets/rendered/traefik-deployments.env"
 if [ ! -f "$ENV_FILE" ] && [ -f "/run/secrets/traefik-deployments.env" ]; then
   ENV_FILE="/run/secrets/traefik-deployments.env"
@@ -64,7 +65,7 @@ show_help() {
 setup_app_env() {
   local query="$1"
   local resolved_json
-  resolved_json=$(python3 "$ENGINE" resolve "$query" 2>/dev/null || true)
+  resolved_json=$("$PYTHON_BIN" "$ENGINE" resolve "$query" || true)
 
   if [ -z "$resolved_json" ]; then
     echo "❌ Error: Service '$query' not found under $SITES_DIR or Core"
@@ -72,10 +73,10 @@ setup_app_env() {
   fi
 
   # Extract fields via python json
-  TARGET_TYPE=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('type', 'app'))" "$resolved_json")
-  APP_DIR=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['dir_path'])" "$resolved_json")
-  CANONICAL_NAME=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['name'])" "$resolved_json")
-  TARGET_CONTAINER=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('container', ''))" "$resolved_json")
+  TARGET_TYPE=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('type', 'app'))" "$resolved_json")
+  APP_DIR=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d['dir_path'])" "$resolved_json")
+  CANONICAL_NAME=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d['name'])" "$resolved_json")
+  TARGET_CONTAINER=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('container', ''))" "$resolved_json")
 
   if [ "$TARGET_TYPE" = "core" ] || [ "$TARGET_TYPE" = "core_service" ]; then
     if [ ! -d "$CORE_DIR" ]; then
@@ -93,7 +94,7 @@ setup_app_env() {
     return
   fi
 
-  RESOLVED_DOMAIN=$(python3 -c "import json, sys; d=json.loads(sys.argv[1]); print(d['domain'])" "$resolved_json")
+  RESOLVED_DOMAIN=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d['domain'])" "$resolved_json")
 
   # 1. Base infrastructure defaults
   export PROXY_NETWORK="${PROXY_NETWORK:-proxy-net}"
@@ -110,7 +111,7 @@ setup_app_env() {
   # 3. Dynamic environment variables from app.yaml (e.g. PROJECT_PATH, MEDIA_PATH, etc.)
   while IFS= read -r -d '' k && IFS= read -r -d '' v; do
     export "$k=$v"
-  done < <(python3 -c "
+  done < <("$PYTHON_BIN" -c "
 import json, re, sys
 RESERVED = {'PATH', 'LD_PRELOAD', 'IFS', 'SHELL', 'USER', 'CORE_DIR', 'SITES_DIR', 'ENV_FILE', 'HOMESERVER_ENV'}
 d = json.loads(sys.argv[1])
@@ -151,23 +152,23 @@ APP=$2
 
 case "$COMMAND" in
   list|status)
-    python3 "$ENGINE" list "${@:2}"
+    "$PYTHON_BIN" "$ENGINE" list "${@:2}"
     ;;
   ssl)
-    python3 "$ENGINE" ssl "${@:2}"
+    "$PYTHON_BIN" "$ENGINE" ssl "${@:2}"
     ;;
   info)
     if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    python3 "$ENGINE" info "${@:2}"
+    "$PYTHON_BIN" "$ENGINE" info "${@:2}"
     ;;
   sync)
-    python3 "$ENGINE" sync "${@:2}"
+    "$PYTHON_BIN" "$ENGINE" sync "${@:2}"
     ;;
   complete)
-    python3 "$ENGINE" complete "${@:2}"
+    "$PYTHON_BIN" "$ENGINE" complete "${@:2}"
     ;;
   resolve)
-    python3 "$ENGINE" resolve "${@:2}"
+    "$PYTHON_BIN" "$ENGINE" resolve "${@:2}"
     ;;
   completion)
     cat <<'EOF'
@@ -242,7 +243,7 @@ EOF
     else
       echo "🚀 Starting $CANONICAL_NAME ($APP_DIR)..."
       cd "$APP_DIR" && docker compose up -d --remove-orphans "${@:3}"
-      python3 "$ENGINE" sync >/dev/null 2>&1 || true
+      "$PYTHON_BIN" "$ENGINE" sync >/dev/null 2>&1 || true
     fi
     ;;
   down)
@@ -257,7 +258,7 @@ EOF
     else
       echo "🛑 Stopping $CANONICAL_NAME ($APP_DIR)..."
       cd "$APP_DIR" && docker compose down "${@:3}"
-      python3 "$ENGINE" sync >/dev/null 2>&1 || true
+      "$PYTHON_BIN" "$ENGINE" sync >/dev/null 2>&1 || true
     fi
     ;;
   restart)
@@ -277,7 +278,7 @@ EOF
     else
       echo "🔄 Restarting $CANONICAL_NAME ($APP_DIR)..."
       cd "$APP_DIR" && docker compose down && docker compose up -d "${@:3}"
-      python3 "$ENGINE" sync >/dev/null 2>&1 || true
+      "$PYTHON_BIN" "$ENGINE" sync >/dev/null 2>&1 || true
     fi
     ;;
   update)
@@ -318,7 +319,7 @@ EOF
     echo "🚀 Recreating container stack..."
     cd "$APP_DIR" && docker compose up -d --remove-orphans "${@:3}"
 
-    python3 "$ENGINE" sync >/dev/null 2>&1 || true
+    "$PYTHON_BIN" "$ENGINE" sync >/dev/null 2>&1 || true
     echo "✨ $CANONICAL_NAME successfully updated!"
     ;;
   pull)

@@ -5,6 +5,7 @@ Security invariant tests for Docker Compose and container isolation.
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -135,7 +136,10 @@ exit 0
     # 3. Execute scripts/appctl config vuln-app directly
     appctl_path = CORE_ROOT / "scripts" / "appctl"
     env = os.environ.copy()
-    env["PATH"] = f"{mock_bin}:{env['PATH']}"
+    if "NIX_PYTHONPATH" in env and "PYTHONPATH" not in env:
+        env["PYTHONPATH"] = env["NIX_PYTHONPATH"]
+    env["PATH"] = f"{mock_bin}:{Path(sys.executable).parent}:{env['PATH']}"
+    env["PYTHON_BIN"] = sys.executable
     env["SITES_DIR"] = str(sites_dir)
     env["HOMELAB_DOMAIN"] = "example.test"
     env["CORE_DIR"] = str(CORE_ROOT)
