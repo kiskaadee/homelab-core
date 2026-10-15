@@ -2,6 +2,9 @@
 Security invariant tests for Docker Compose and container isolation.
 """
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -10,6 +13,7 @@ CORE_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def test_socket_proxy_is_strictly_read_only():
+
     """Ensure socket-proxy container blocks state-modifying requests (POST=0, DELETE=0)."""
     compose_path = CORE_ROOT / "docker-compose.yml"
     with open(compose_path, encoding="utf-8") as f:
@@ -87,61 +91,75 @@ def test_no_eval_in_appctl_script():
 
 
 def test_appctl_env_injection_resilience(tmp_path: Path):
-    """Ensure environment values from app.yaml cannot execute shell commands via command substitution."""
+    """Ensure environment values from app.yaml cannot execute shell commands via command substitution
+
+    in scripts/appctl during environment setup. Executes scripts/appctl directly with a mock docker binary.
+    """
     canary = tmp_path / "pwned.txt"
     payload = f"$(touch {canary})"
 
-    import json
-    import subprocess
+    # 1. Setup mock Sites directory with vulnerable app.yaml and docker-compose.yml
+    sites_dir = tmp_path / "Sites"
+    app_dir = sites_dir / "vuln-app"
+    app_dir.mkdir(parents=True)
 
+    app_yaml = f"""
+name: vuln-app
+domain: vuln.example.test
+env:
+  INJECTION_TEST: '{payload}'
+  NORMAL_VAR: 'safe_value'
+"""
+
+    (app_dir / "app.yaml").write_text(app_yaml.strip(), encoding="utf-8")
+    (app_dir / "docker-compose.yml").write_text("services:\n  web:\n    image: nginx\n", encoding="utf-8")
+
+    # 2. Setup mock docker binary to capture environment without requiring a running Docker daemon
+    mock_bin = tmp_path / "bin"
+    mock_bin.mkdir()
+    mock_docker = mock_bin / "docker"
+    bash_bin = shutil.which("bash") or "bash"
+
+    mock_docker_script = f"""#!{bash_bin}
+if [ "$1" = "compose" ] && [ "$2" = "config" ]; then
+  echo "MOCK_DOCKER_COMPOSE_CONFIG"
+  echo "CAPTURED_INJECTION=$INJECTION_TEST"
+  echo "CAPTURED_NORMAL=$NORMAL_VAR"
+  exit 0
+fi
+exit 0
+"""
+    mock_docker.write_text(mock_docker_script, encoding="utf-8")
+    mock_docker.chmod(0o755)
+
+    # 3. Execute scripts/appctl config vuln-app directly
     appctl_path = CORE_ROOT / "scripts" / "appctl"
-    appctl_content = appctl_path.read_text(encoding="utf-8")
-    assert "eval " not in appctl_content
-    assert "while IFS= read -r -d '' k && IFS= read -r -d '' v; do" in appctl_content
-
-    resolved_json = json.dumps({
-        "name": "test-app",
-        "domain": "test.example.com",
-        "dir_path": str(tmp_path),
-        "env": {"INJECTION_TEST": payload, "NORMAL_VAR": "safe_value"},
-    })
-
-    bash_code = f"""
-    set -euo pipefail
-    resolved_json='{resolved_json}'
-    while IFS= read -r -d '' k && IFS= read -r -d '' v; do
-      export "$k=$v"
-    done < <(python3 -c "
-import json, re, sys
-RESERVED = {{'PATH', 'LD_PRELOAD', 'IFS', 'SHELL', 'USER', 'CORE_DIR', 'SITES_DIR', 'ENV_FILE', 'HOMESERVER_ENV'}}
-d = json.loads(sys.argv[1])
-env_dict = d.get('env', {{}})
-if isinstance(env_dict, dict):
-    for k, v in env_dict.items():
-        k_str = str(k).strip()
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', k_str) or k_str in RESERVED:
-            continue
-        if v is not None and v != '':
-            sys.stdout.buffer.write(k_str.encode('utf-8') + b'\\0' + str(v).encode('utf-8') + b'\\0')
-" "$resolved_json")
-
-    echo "INJECTION_TEST=$INJECTION_TEST"
-    echo "NORMAL_VAR=$NORMAL_VAR"
-    """
+    env = os.environ.copy()
+    env["PATH"] = f"{mock_bin}:{env['PATH']}"
+    env["SITES_DIR"] = str(sites_dir)
+    env["HOMELAB_DOMAIN"] = "example.test"
+    env["CORE_DIR"] = str(CORE_ROOT)
 
     res = subprocess.run(
-        ["bash", "-c", bash_code],
+        [bash_bin, str(appctl_path), "config", "vuln-app"],
+        env=env,
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+    # 4. Assertions: command substitution was not executed, script ran, and mock docker received literal value
     assert not canary.exists(), "Command substitution was executed on the host during environment setup!"
-    assert res.returncode == 0, f"Extraction failed: {res.stderr}"
-    assert f"INJECTION_TEST={payload}" in res.stdout
-    assert "NORMAL_VAR=safe_value" in res.stdout
+    assert res.returncode == 0, f"appctl config failed: {res.stderr}\nStdout: {res.stdout}"
+    assert "MOCK_DOCKER_COMPOSE_CONFIG" in res.stdout
+    assert f"CAPTURED_INJECTION={payload}" in res.stdout
+    assert "CAPTURED_NORMAL=safe_value" in res.stdout
+    assert "/dangerous/override" not in res.stdout
 
 
 def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests():
+
     """Ensure personal domains and operator usernames are absent from scripts and test files."""
     forbidden = ["roadtotech.me", "kiskaadee"]
     root_dirs = [CORE_ROOT / "scripts", CORE_ROOT / "tests"]
