@@ -36,7 +36,8 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 # Lock the homelab root domain before setup_app_env can mutate $DOMAIN
-export HOMELAB_DOMAIN="${HOMELAB_DOMAIN:-${DOMAIN_SUFFIX:-${DOMAIN:-roadtotech.me}}}"
+# Canonical precedence: HOMELAB_DOMAIN -> DOMAIN_SUFFIX -> DOMAIN
+export HOMELAB_DOMAIN="${HOMELAB_DOMAIN:-${DOMAIN_SUFFIX:-${DOMAIN:-}}}"
 
 # Show help usage
 show_help() {
@@ -98,7 +99,7 @@ setup_app_env() {
   export PROXY_NETWORK="${PROXY_NETWORK:-proxy-net}"
   export NETWORK_NAME="${NETWORK_NAME:-$PROXY_NETWORK}"
   export CERT_RESOLVER="${CERT_RESOLVER:-myresolver}"
-  export DOMAIN_SUFFIX="${DOMAIN_SUFFIX:-roadtotech.me}"
+  export DOMAIN_SUFFIX="${DOMAIN_SUFFIX:-$HOMELAB_DOMAIN}"
 
   # 2. Canonical application identity
   export SERVICE_NAME="$CANONICAL_NAME"

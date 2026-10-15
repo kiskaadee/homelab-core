@@ -101,7 +101,7 @@ def test_sites_app_normalization(app_factory: AppFactory):
         dir_name="homelab-custom",
         manifest_yaml="""
         name: testapp
-        # Missing domain - should fallback to <name>.roadtotech.me
+        # Missing domain - should fallback to <name>.<HOMELAB_DOMAIN>
         aliases: single-string-alias # should become a list[str]
         auth: "False" # should evaluate based on boolean casting
         homepage:
@@ -129,7 +129,7 @@ def test_sites_app_source_provenance_normalization(app_factory: AppFactory):
         name: bitetrack
         source:
             type: git
-            url: https://git.roadtotech.me/kiskaadee/bitetrack.git
+            url: https://git.example.com/operator/bitetrack.git
             ref: v1.2.0
         """
     )
@@ -139,7 +139,7 @@ def test_sites_app_source_provenance_normalization(app_factory: AppFactory):
         manifest_yaml="""
         name: doc2site
         source:
-            url: https://git.roadtotech.me/kiskaadee/doc2site.git
+            url: https://git.example.com/operator/doc2site.git
         """
     )
     # 3. Image-only app (no source block)
@@ -156,7 +156,7 @@ def test_sites_app_source_provenance_normalization(app_factory: AppFactory):
     assert bitetrack is not None
     assert bitetrack.source is not None
     assert bitetrack.source.type == "git"
-    assert bitetrack.source.url == "https://git.roadtotech.me/kiskaadee/bitetrack.git"
+    assert bitetrack.source.url == "https://git.example.com/operator/bitetrack.git"
     assert bitetrack.source.ref == "v1.2.0"
     assert bitetrack.to_dict()["source"]["ref"] == "v1.2.0"
 
@@ -349,8 +349,8 @@ def test_homepage_sync_core_services_domain_isolation(
     hp_config_dir = mock_core_dir / "config" / "homepage"
     hp_config_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr(engine, "HOMELAB_DOMAIN", "roadtotech.me")
-    monkeypatch.setenv("DOMAIN", "mermaid.roadtotech.me")
+    monkeypatch.setattr(engine, "HOMELAB_DOMAIN", "example.com")
+    monkeypatch.setenv("DOMAIN", "mermaid.example.com")
 
     engine.cmd_sync_homepage(["--homepage-dir=" + str(hp_config_dir)])
 
@@ -358,10 +358,10 @@ def test_homepage_sync_core_services_domain_isolation(
     assert output_file.exists()
     content = output_file.read_text()
 
-    assert "https://dashboard.roadtotech.me" in content
-    assert "https://traefik.roadtotech.me" in content
-    assert "https://auth.roadtotech.me" in content
-    assert "mermaid.roadtotech.me" not in content
+    assert "https://dashboard.example.com" in content
+    assert "https://traefik.example.com" in content
+    assert "https://auth.example.com" in content
+    assert "mermaid.example.com" not in content
 
 
 def test_resolve_core_stack_type():
@@ -433,7 +433,7 @@ def test_unification_uses_core_manifest_dataclasses(app_factory: AppFactory):
         manifest_yaml="""
         name: unified
         source:
-            url: https://git.roadtotech.me/kiskaadee/unified.git
+            url: https://git.example.com/operator/unified.git
             ref: v1.0.0
         homepage:
             title: Unified App

@@ -101,7 +101,7 @@ def test_appctl_env_injection_resilience(tmp_path: Path):
 
     resolved_json = json.dumps({
         "name": "test-app",
-        "domain": "test.roadtotech.me",
+        "domain": "test.example.com",
         "dir_path": str(tmp_path),
         "env": {"INJECTION_TEST": payload, "NORMAL_VAR": "safe_value"},
     })
@@ -139,6 +139,28 @@ if isinstance(env_dict, dict):
     assert res.returncode == 0, f"Extraction failed: {res.stderr}"
     assert f"INJECTION_TEST={payload}" in res.stdout
     assert "NORMAL_VAR=safe_value" in res.stdout
+
+
+def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests():
+    """Ensure personal domains and operator usernames are absent from scripts and test files."""
+    forbidden = ["roadtotech.me", "kiskaadee"]
+    root_dirs = [CORE_ROOT / "scripts", CORE_ROOT / "tests"]
+    violations = []
+
+    for root_dir in root_dirs:
+        for file_path in root_dir.rglob("*"):
+            if (
+                file_path.is_file()
+                and file_path.suffix in (".py", ".sh", ".bash", ".yml", ".yaml", "")
+                and file_path.name != "test_security_invariants.py"
+            ):
+                content = file_path.read_text(encoding="utf-8", errors="ignore")
+                for term in forbidden:
+                    if term in content:
+                        violations.append(f"{file_path.relative_to(CORE_ROOT)}: contains prohibited literal '{term}'")
+
+    assert not violations, "Platform genericism violations detected:\n" + "\n".join(violations)
+
 
 
 

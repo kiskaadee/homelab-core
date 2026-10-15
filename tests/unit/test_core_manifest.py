@@ -22,25 +22,25 @@ from core_manifest import (
 
 
 def test_validate_transport_https():
-    scheme, url = validate_transport("https://gitea.roadtotech.me/kiskaadee/homelab-snappymail.git")
+    scheme, url = validate_transport("https://git.example.com/operator/homelab-snappymail.git")
     assert scheme == TransportScheme.HTTPS
-    assert url == "https://gitea.roadtotech.me/kiskaadee/homelab-snappymail.git"
+    assert url == "https://git.example.com/operator/homelab-snappymail.git"
 
 
 def test_validate_transport_ssh():
-    scheme, url = validate_transport("ssh://git@gitea.roadtotech.me:2223/kiskaadee/homelab-docs.git")
+    scheme, url = validate_transport("ssh://git@git.example.com:2223/operator/homelab-docs.git")
     assert scheme == TransportScheme.SSH
-    assert url == "ssh://git@gitea.roadtotech.me:2223/kiskaadee/homelab-docs.git"
+    assert url == "ssh://git@git.example.com:2223/operator/homelab-docs.git"
 
 
 def test_validate_transport_git_scp():
-    scheme, url = validate_transport("git@github.com:kiskaadee/custom-workload.git")
+    scheme, url = validate_transport("git@github.com:operator/custom-workload.git")
     assert scheme == TransportScheme.GIT_SCP
-    assert url == "git@github.com:kiskaadee/custom-workload.git"
+    assert url == "git@github.com:operator/custom-workload.git"
 
 
 @pytest.mark.parametrize("insecure_url", [
-    "http://insecure.roadtotech.me/repo.git",
+    "http://insecure.example.com/repo.git",
     "http://github.com/repo.git",
 ])
 def test_validate_transport_rejects_http(insecure_url: str):
@@ -50,7 +50,7 @@ def test_validate_transport_rejects_http(insecure_url: str):
 
 @pytest.mark.parametrize("traversal_url", [
     "../../etc/shadow",
-    "/home/kiskaadee/secret",
+    "/home/operator/secret",
     "~/vault",
     "file:///etc/passwd",
 ])
@@ -83,7 +83,7 @@ schemaVersion: "1.0"
 name: "bitetrack"
 aliases:
   - "bt"
-domain: "bitetrack.roadtotech.me"
+domain: "bitetrack.example.com"
 description: "Nutrition and macro tracking application"
 visible: true
 auth: true
@@ -93,7 +93,7 @@ env:
   PORT: 8080
 source:
   type: git
-  url: "https://git.roadtotech.me/kiskaadee/bitetrack.git"
+  url: "https://git.example.com/operator/bitetrack.git"
   ref: "v1.2.0"
 deployment:
   strategy: compose
@@ -116,7 +116,7 @@ homepage:
     assert manifest.is_class_b is False
     assert manifest.is_internal is False
     assert manifest.source is not None
-    assert manifest.source.url == "https://git.roadtotech.me/kiskaadee/bitetrack.git"
+    assert manifest.source.url == "https://git.example.com/operator/bitetrack.git"
     assert manifest.source.ref == "v1.2.0"
     assert manifest.source.ref_type == RefType.TAG
     assert manifest.source.transport == TransportScheme.HTTPS
@@ -128,7 +128,7 @@ homepage:
 def test_parse_manifest_class_b_image_only():
     raw_yaml = """
 name: "snappymail"
-domain: "mail.roadtotech.me"
+domain: "mail.example.com"
 description: "Webmail Client"
 deployment:
   actions:
@@ -144,7 +144,7 @@ deployment:
 
 def test_parse_manifest_rejects_missing_name():
     with pytest.raises(ManifestValidationError, match="missing mandatory string field 'name'"):
-        parse_manifest("domain: test.roadtotech.me\n")
+        parse_manifest("domain: test.example.com\n")
 
 
 def test_parse_manifest_rejects_invalid_name():

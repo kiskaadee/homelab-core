@@ -56,8 +56,8 @@ def validate_environment() -> None:
 
     if not HOMELAB_DOMAIN:
         errors.append(
-            "• Missing 'HOMELAB_DOMAIN' (or 'DOMAIN') environment variable.\n"
-            "  Please export it (e.g. export HOMELAB_DOMAIN='roadtotech.me') or set it in your environment file."
+            "• Missing 'HOMELAB_DOMAIN' (or 'DOMAIN_SUFFIX' / 'DOMAIN') environment variable.\n"
+            "  Please export it (e.g. export HOMELAB_DOMAIN='example.com') or set it in your environment file."
         )
 
     if not os.path.isdir(CORE_DIR):
@@ -77,7 +77,7 @@ ManifestError = ManifestValidationError
 class App:
     name: str                       # Canonical identifier (e.g., "traefik", "jellyfin")
     description: str = ""           # Human-readable summary for dashboards and CLI info
-    domain: str = ""                # Routing FQDN (e.g., "auth.roadtotech.me") or "internal".
+    domain: str = ""                # Routing FQDN (e.g., "auth.example.com") or "internal".
     dir_path: str = ""              # Filesystem directory (CORE_DIR for Core, or ~/Sites/<app> for Sites).
 
     @property

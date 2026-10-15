@@ -85,7 +85,7 @@ def test_resolve_upstream_provenance_image_only():
 
 def test_resolve_upstream_provenance_synced():
     source = SourceConfig(
-        url="https://git.roadtotech.me/kiskaadee/app.git",
+        url="https://git.example.com/operator/app.git",
         ref="main",
         ref_type=RefType.BRANCH,
         transport=TransportScheme.HTTPS,
@@ -106,7 +106,7 @@ def test_resolve_upstream_provenance_synced():
 
 def test_resolve_upstream_provenance_update_available():
     source = SourceConfig(
-        url="https://git.roadtotech.me/kiskaadee/app.git",
+        url="https://git.example.com/operator/app.git",
         ref="main",
         ref_type=RefType.BRANCH,
         transport=TransportScheme.HTTPS,
@@ -157,7 +157,7 @@ def test_resolve_upstream_provenance_unreachable():
 def test_resolve_upstream_provenance_pinned_commit():
     sha = "1234567890abcdef1234567890abcdef12345678"
     source = SourceConfig(
-        url="https://git.roadtotech.me/app.git",
+        url="https://git.example.com/app.git",
         ref=sha,
         ref_type=RefType.COMMIT,
         transport=TransportScheme.HTTPS,

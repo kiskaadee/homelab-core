@@ -106,7 +106,7 @@ Core platform code, templates, and documentation must remain strictly instance-a
 
 - Instance-specific domains (e.g. personal domain names), operator usernames, and deployment topologies must never be hardcoded into Core platform definitions.
 - All routing and service identities must be injected declaratively at runtime via environment variables (`HOMELAB_DOMAIN`, `DOMAIN_SUFFIX`) and local configuration overlays.
-- Example manifests, tests, and documentation must use RFC-compliant generic placeholders (e.g. `example.com`, `example.org`, `testdomain.local`).
+- Example manifests, tests, and documentation must use RFC-compliant generic placeholders (e.g. `example.com`, `example.org`, `example.test`).
 
 ### 9. License
 
