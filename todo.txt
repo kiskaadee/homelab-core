@@ -11,3 +11,14 @@ x 2026-10-13 (A) Close authorization design enforcing token-everywhere policy in
 x 2026-10-13 (B) Specify daemon execution and privilege boundaries for Docker, subprocesses, and filesystem roots in docs/plans/p4-readiness-plan.md +security @p4-gate
 x 2026-10-13 (B) Define append-only audit telemetry schema, lifecycle, and failure handling semantics in docs/plans/p4-readiness-plan.md +audit @p4-gate
 x 2026-10-13 (C) Establish P4 acceptance test matrix and definition of done before daemon implementation in docs/plans/p4-readiness-plan.md +test @p4-gate
+x 2026-10-14 (A) Eliminate eval in scripts/appctl and enforce strict env key validation in scripts/core_manifest.py +security @appctl
+(A) Enforce deployments.yaml as sole registry and remove dynamic discovery fallback in scripts/gitops_dispatcher.py +registry @gitops
+(A) Harden validate_compose_security in scripts/gitops_dispatcher.py blocking relative traversal, cross-tenant mounts, and privilege escalation +compose @gitops
+(A) Unify manifest parsing on core_manifest.py and eliminate duplicate parsers in scripts/appctl_engine.py +manifest @engine
+(A) Scaffold asyncio daemon server supporting dual transports (Unix socket /run/homelab/appctl.sock and HTTP) in scripts/appctl_daemon.py +daemon @p4
+(A) Implement unit and integration tests for dual-transport requests and error handling in tests/unit/test_appctl_daemon.py +test @p4
+(B) Implement command-oriented operational router wiring domain actions to in-process appctl_engine.py methods and fixed subprocess executions +router @p4
+(B) Implement token authentication middleware validating user-scoped Bearer tokens for mutating requests +auth @p4
+(B) Implement append-only audit logger writing structured RFC JSONL records with fail-closed disk guard +audit @p4
+(C) Re-implement scripts/appctl as a thin client dispatching JSON requests to the daemon Unix domain socket +cli @p4
+(C) Create NixOS systemd unit module for homelab-appctl.service with strict sandboxing and socket management +nixos @p4

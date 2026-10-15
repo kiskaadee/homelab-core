@@ -181,3 +181,39 @@ def test_parse_manifest_from_path(tmp_path: Path):
     manifest = parse_manifest(manifest_file)
     assert manifest.name == "file-app"
     assert manifest.is_internal is True
+
+
+@pytest.mark.parametrize("invalid_key", [
+    "123_BAD",
+    "INVALID-KEY",
+    "FOO;BAR",
+    "KEY WITH SPACE",
+    "PATH",
+    "LD_PRELOAD",
+    "IFS",
+    "CORE_DIR",
+    "SITES_DIR",
+])
+def test_parse_manifest_rejects_invalid_or_reserved_env_keys(invalid_key: str):
+    raw_yaml = f"""
+name: "app"
+env:
+  "{invalid_key}": "some_value"
+"""
+    with pytest.raises(ManifestValidationError, match="Invalid or reserved environment variable key"):
+        parse_manifest(raw_yaml)
+
+
+def test_parse_manifest_accepts_valid_env_keys():
+    raw_yaml = """
+name: "app"
+env:
+  PROJECT_PATH: "/mnt/data"
+  CUSTOM_PORT_1: "8080"
+  _INTERNAL_FLAG: "true"
+"""
+    manifest = parse_manifest(raw_yaml)
+    assert manifest.env["PROJECT_PATH"] == "/mnt/data"
+    assert manifest.env["CUSTOM_PORT_1"] == "8080"
+    assert manifest.env["_INTERNAL_FLAG"] == "true"
+

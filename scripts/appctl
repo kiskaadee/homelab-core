@@ -107,14 +107,21 @@ setup_app_env() {
   export DOMAIN="$RESOLVED_DOMAIN"
 
   # 3. Dynamic environment variables from app.yaml (e.g. PROJECT_PATH, MEDIA_PATH, etc.)
-  eval "$(python3 -c "
-import json, sys
+  while IFS= read -r -d '' k && IFS= read -r -d '' v; do
+    export "$k=$v"
+  done < <(python3 -c "
+import json, re, sys
+RESERVED = {'PATH', 'LD_PRELOAD', 'IFS', 'SHELL', 'USER', 'CORE_DIR', 'SITES_DIR', 'ENV_FILE', 'HOMESERVER_ENV'}
 d = json.loads(sys.argv[1])
 env_dict = d.get('env', {})
-for k, v in env_dict.items():
-    if v != '' and v is not None:
-        print(f'export {k}=\"{v}\"')
-" "$resolved_json")"
+if isinstance(env_dict, dict):
+    for k, v in env_dict.items():
+        k_str = str(k).strip()
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', k_str) or k_str in RESERVED:
+            continue
+        if v is not None and v != '':
+            sys.stdout.buffer.write(k_str.encode('utf-8') + b'\0' + str(v).encode('utf-8') + b'\0')
+" "$resolved_json")
 
   # 4. Source local .env if present
   if [ -f "$APP_DIR/.env" ]; then

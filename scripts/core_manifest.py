@@ -49,6 +49,11 @@ COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 SHORT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,12}$")
 SEMVER_TAG_RE = re.compile(r"^v?[0-9]+(\.[0-9]+)+([a-zA-Z0-9._-]*)$")
 SCP_URL_RE = re.compile(r"^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+:([0-9]+/)?([a-zA-Z0-9._-]+/)*[a-zA-Z0-9._-]+(\.git)?$")
+ENV_KEY_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+RESERVED_ENV_KEYS = {
+    "PATH", "LD_PRELOAD", "IFS", "SHELL", "USER",
+    "CORE_DIR", "SITES_DIR", "ENV_FILE", "HOMESERVER_ENV"
+}
 
 ALLOWED_STRATEGIES = {"compose"}
 ALLOWED_ACTIONS = {"git_pull", "compose_up", "compose_build", "compose_restart"}
@@ -313,7 +318,16 @@ def parse_manifest(raw_input: str | Path | dict[str, Any]) -> Manifest:
 
     # 7. Environment overrides
     env_raw = data.get("env", {})
-    env = dict(env_raw) if isinstance(env_raw, dict) else {}
+    env: dict[str, str] = {}
+    if isinstance(env_raw, dict):
+        for raw_k, raw_v in env_raw.items():
+            k_str = str(raw_k).strip()
+            if not ENV_KEY_RE.match(k_str) or k_str in RESERVED_ENV_KEYS:
+                raise ManifestValidationError(
+                    f"Invalid or reserved environment variable key '{k_str}'. "
+                    f"Keys must match ^[a-zA-Z_][a-zA-Z0-9_]*$ and cannot be reserved."
+                )
+            env[k_str] = str(raw_v) if raw_v is not None else ""
 
     # 8. Deployment Policy
     deployment_raw = data.get("deployment")

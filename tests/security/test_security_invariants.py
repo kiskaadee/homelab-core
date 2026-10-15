@@ -77,3 +77,68 @@ def test_portainer_is_deprecated_and_absent():
 
     volumes = compose.get("volumes", {}) or {}
     assert "portainer_data" not in volumes, "Deprecated volume 'portainer_data' must not exist in docker-compose.yml"
+
+
+def test_no_eval_in_appctl_script():
+    """Ensure scripts/appctl never uses eval on dynamic environment or manifest payloads."""
+    appctl_path = CORE_ROOT / "scripts" / "appctl"
+    content = appctl_path.read_text(encoding="utf-8")
+    assert "eval " not in content, "Dangerous 'eval' detected in scripts/appctl!"
+
+
+def test_appctl_env_injection_resilience(tmp_path: Path):
+    """Ensure environment values from app.yaml cannot execute shell commands via command substitution."""
+    canary = tmp_path / "pwned.txt"
+    payload = f"$(touch {canary})"
+
+    import json
+    import subprocess
+
+    appctl_path = CORE_ROOT / "scripts" / "appctl"
+    appctl_content = appctl_path.read_text(encoding="utf-8")
+    assert "eval " not in appctl_content
+    assert "while IFS= read -r -d '' k && IFS= read -r -d '' v; do" in appctl_content
+
+    resolved_json = json.dumps({
+        "name": "test-app",
+        "domain": "test.roadtotech.me",
+        "dir_path": str(tmp_path),
+        "env": {"INJECTION_TEST": payload, "NORMAL_VAR": "safe_value"},
+    })
+
+    bash_code = f"""
+    set -euo pipefail
+    resolved_json='{resolved_json}'
+    while IFS= read -r -d '' k && IFS= read -r -d '' v; do
+      export "$k=$v"
+    done < <(python3 -c "
+import json, re, sys
+RESERVED = {{'PATH', 'LD_PRELOAD', 'IFS', 'SHELL', 'USER', 'CORE_DIR', 'SITES_DIR', 'ENV_FILE', 'HOMESERVER_ENV'}}
+d = json.loads(sys.argv[1])
+env_dict = d.get('env', {{}})
+if isinstance(env_dict, dict):
+    for k, v in env_dict.items():
+        k_str = str(k).strip()
+        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', k_str) or k_str in RESERVED:
+            continue
+        if v is not None and v != '':
+            sys.stdout.buffer.write(k_str.encode('utf-8') + b'\\0' + str(v).encode('utf-8') + b'\\0')
+" "$resolved_json")
+
+    echo "INJECTION_TEST=$INJECTION_TEST"
+    echo "NORMAL_VAR=$NORMAL_VAR"
+    """
+
+    res = subprocess.run(
+        ["bash", "-c", bash_code],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert not canary.exists(), "Command substitution was executed on the host during environment setup!"
+    assert res.returncode == 0, f"Extraction failed: {res.stderr}"
+    assert f"INJECTION_TEST={payload}" in res.stdout
+    assert "NORMAL_VAR=safe_value" in res.stdout
+
+
+
