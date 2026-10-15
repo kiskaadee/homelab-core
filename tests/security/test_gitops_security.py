@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 # Add Core to path so scripts can be imported
 CORE_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(CORE_ROOT / "scripts"))
@@ -784,6 +786,115 @@ def test_validate_compose_security_nonexistent_file(tmp_path: Path):
     valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path)
     assert valid is True
     assert err is None
+
+
+@pytest.mark.parametrize("malicious_volume", [
+    "../../etc/passwd:/mnt/passwd:ro",
+    "./../../Core/nixos/secrets.yaml:/secrets.yaml",
+    "../other-workload/data:/data",
+])
+def test_validate_compose_security_blocks_relative_traversal(
+    tmp_path: Path, malicious_volume: str
+):
+    """Ensure relative path traversals in volume mounts cannot escape workload root."""
+    app_dir = tmp_path / "my-app"
+    app_dir.mkdir(parents=True)
+
+    compose_file = app_dir / "docker-compose.yml"
+    compose_file.write_text(
+        f"services:\n  web:\n    image: nginx\n    volumes:\n      - '{malicious_volume}'\n",
+        encoding="utf-8",
+    )
+
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, app_dir, app_name="my-app")
+    assert valid is False, f"Expected relative traversal '{malicious_volume}' to be rejected!"
+    assert err is not None and "prohibited host bind mount" in err
+
+
+def test_validate_compose_security_blocks_cross_tenant_state_mounts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Ensure workload 'my-app' cannot mount another workload's state directory ('other-app')."""
+    sites_dir = tmp_path / "Sites"
+    app_dir = sites_dir / "my-app"
+    app_dir.mkdir(parents=True)
+
+    state_root = tmp_path / "var/lib/homelab"
+    (state_root / "my-app").mkdir(parents=True)
+    (state_root / "other-app").mkdir(parents=True)
+    monkeypatch.setenv("HOMELAB_STATE_ROOT", str(state_root))
+
+    # Cross-tenant state mount
+    compose_file = app_dir / "docker-compose.yml"
+    compose_file.write_text(
+        f"services:\n  web:\n    image: nginx\n    volumes:\n      - '{state_root}/other-app:/data'\n",
+        encoding="utf-8",
+    )
+
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, app_dir, app_name="my-app")
+    assert valid is False, "Expected cross-tenant state mount to be rejected!"
+    assert err is not None and ("prohibited host bind mount" in err or "cross-tenant" in err.lower())
+
+    # Authorized own state mount must pass
+    compose_file.write_text(
+        f"services:\n  web:\n    image: nginx\n    volumes:\n      - '{state_root}/my-app:/data'\n",
+        encoding="utf-8",
+    )
+    valid_own, err_own = gitops_dispatcher.validate_compose_security(compose_file, app_dir, app_name="my-app")
+    assert valid_own is True, f"Own state mount should be permitted, got error: {err_own}"
+
+
+@pytest.mark.parametrize("unsafe_directive", [
+    "cap_add:\n      - SYS_ADMIN",
+    "pid: host",
+    "ipc: host",
+    "userns_mode: host",
+    "devices:\n      - /dev/sda:/dev/sda",
+    "security_opt:\n      - apparmor:unconfined",
+])
+def test_validate_compose_security_blocks_privilege_escalation_primitives(
+    tmp_path: Path, unsafe_directive: str
+):
+    """Ensure dangerous container breakout capabilities and host namespaces are blocked."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text(
+        f"services:\n  app:\n    image: alpine\n    {unsafe_directive}\n",
+        encoding="utf-8",
+    )
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path, app_name="app")
+    assert valid is False, f"Directive should be blocked:\n{unsafe_directive}"
+    assert err is not None
+
+
+def test_validate_compose_security_rejects_top_level_include(tmp_path: Path):
+    """Ensure top-level Compose include directives are rejected to prevent out-of-tree includes."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text("""
+include:
+  - /etc/shadow
+services:
+  app:
+    image: alpine
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path, app_name="app")
+    assert valid is False
+    assert err is not None and "include" in err.lower()
+
+
+def test_validate_compose_security_rejects_symlink_escape(tmp_path: Path):
+    """Ensure docker-compose.yml cannot be a symlink escaping the workload directory."""
+    app_dir = tmp_path / "my-app"
+    app_dir.mkdir(parents=True)
+    outside_file = tmp_path / "outside-compose.yml"
+    outside_file.write_text("services:\n  app:\n    image: alpine\n", encoding="utf-8")
+
+    compose_link = app_dir / "docker-compose.yml"
+    compose_link.symlink_to(outside_file)
+
+    valid, err = gitops_dispatcher.validate_compose_security(compose_link, app_dir, app_name="my-app")
+    assert valid is False
+    assert err is not None and "symlink" in err.lower()
+
 
 
 

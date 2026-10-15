@@ -14,7 +14,8 @@ x 2026-10-13 (C) Establish P4 acceptance test matrix and definition of done befo
 x 2026-10-14 (A) Eliminate eval in scripts/appctl and enforce strict env key validation in scripts/core_manifest.py +security @appctl
 x 2026-10-15 (A) Enforce deployments.yaml as sole registry and remove dynamic discovery fallback in scripts/gitops_dispatcher.py +registry @gitops
 
-(A) Harden validate_compose_security in scripts/gitops_dispatcher.py blocking relative traversal, cross-tenant mounts, and privilege escalation +compose @gitops
+x 2026-10-15 (A) Harden validate_compose_security in scripts/gitops_dispatcher.py blocking relative traversal, cross-tenant mounts, and privilege escalation +compose @gitops
+
 (A) Unify manifest parsing on core_manifest.py and eliminate duplicate parsers in scripts/appctl_engine.py +manifest @engine
 (A) Scaffold asyncio daemon server supporting dual transports (Unix socket /run/homelab/appctl.sock and HTTP) in scripts/appctl_daemon.py +daemon @p4
 (A) Implement unit and integration tests for dual-transport requests and error handling in tests/unit/test_appctl_daemon.py +test @p4

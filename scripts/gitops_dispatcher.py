@@ -278,26 +278,49 @@ ALLOWED_ACTIONS = {"git_pull", "compose_up", "compose_build", "compose_restart"}
 ALLOWED_STRATEGIES = {"compose"}
 
 
-def validate_compose_security(compose_file: Path, allowed_root: Path) -> tuple[bool, str | None]:
+PROHIBITED_HOST_NAMESPACES = {"host"}
+DANGEROUS_SECURITY_OPTS = {"unconfined", "apparmor:unconfined", "seccomp:unconfined"}
+
+
+def validate_compose_security(
+    compose_file: Path,
+    allowed_root: Path,
+    app_name: str | None = None,
+) -> tuple[bool, str | None]:
     """
-    Pre-flight AST inspection of workload docker-compose.yml to reject security violations:
-    1. privileged: true
-    2. /var/run/docker.sock bind mounts
-    3. network_mode: host
-    4. host root bind mounts outside allowed state root or workload directory
+    Pre-flight AST inspection of workload docker-compose.yml enforcing Core platform security invariants:
+    1. File Integrity: regular file, non-symlink (or strictly contained symlink).
+    2. Privilege Containment: blocks 'privileged: true', 'cap_add', 'devices', and 'security_opt: unconfined'.
+    3. Host Namespace Isolation: blocks 'pid: host', 'ipc: host', 'uts: host', 'userns_mode: host', 'network_mode: host'.
+    4. Docker Socket Ban: blocks direct mounts of /var/run/docker.sock.
+    5. Top-Level Inclusion Ban: blocks top-level 'include' directives.
+    6. Bind-Mount & Tenant State Isolation: resolves all relative and absolute host paths. Requires containment
+       strictly within either the workload root (allowed_root) OR the workload's dedicated state root
+       (~/var/lib/homelab/<app_name>/). Cross-tenant state mounts are rejected fail-closed.
     """
-    if not compose_file.is_file():
+    if not compose_file.exists():
         return True, None
+
+    if not compose_file.is_file():
+        return False, f"Compose file '{compose_file}' is not a regular file."
+
+    canonical_allowed_root = allowed_root.resolve()
+
+    if compose_file.is_symlink():
+        resolved_compose = compose_file.resolve()
+        if not resolved_compose.is_relative_to(canonical_allowed_root):
+            return False, f"Compose file symlink escapes workload root: {compose_file} -> {resolved_compose}"
 
     try:
         content = compose_file.read_text(encoding="utf-8")
     except OSError as e:
         return False, f"Failed to read compose file {compose_file}: {e}"
 
+    yaml_errors = (yaml.YAMLError,) if yaml is not None else ()
     if yaml is not None:
         try:
             data = yaml.safe_load(content) or {}
-        except yaml.YAMLError as e:
+        except yaml_errors as e:
             return False, f"Failed to parse compose YAML {compose_file}: {e}"
     else:
         # Fallback regex inspection if yaml module is not present
@@ -307,16 +330,29 @@ def validate_compose_security(compose_file: Path, allowed_root: Path) -> tuple[b
             return False, "Docker socket mounts are prohibited in workload compose files."
         if re.search(r"^\s*network_mode:\s*[\"']?host[\"']?", content, re.MULTILINE | re.IGNORECASE):
             return False, "Host networking (network_mode: host) is prohibited in workload compose files."
+        if re.search(r"^\s*cap_add:\s*", content, re.MULTILINE | re.IGNORECASE):
+            return False, "Linux capabilities (cap_add) are prohibited in workload compose files."
+        if re.search(r"^\s*devices:\s*", content, re.MULTILINE | re.IGNORECASE):
+            return False, "Host device mounts (devices) are prohibited in workload compose files."
+        if re.search(r"^\s*include:\s*", content, re.MULTILINE | re.IGNORECASE):
+            return False, "Top-level include directives are prohibited in workload compose files."
         return True, None
 
     if not isinstance(data, dict):
         return False, f"Invalid compose root in {compose_file}: expected mapping"
+
+    if "include" in data:
+        return False, "Top-level 'include' directives are prohibited in workload compose files."
 
     services = data.get("services")
     if not isinstance(services, dict):
         return True, None
 
     state_root = Path(os.environ.get("HOMELAB_STATE_ROOT", Path.home() / "var/lib/homelab")).resolve()
+    target_app_name = app_name or allowed_root.name
+    target_state_root = (state_root / target_app_name).resolve()
+
+    top_volumes = set(data.get("volumes", {}).keys()) if isinstance(data.get("volumes"), dict) else set()
 
     for svc_name, svc in services.items():
         if not isinstance(svc, dict):
@@ -325,9 +361,24 @@ def validate_compose_security(compose_file: Path, allowed_root: Path) -> tuple[b
         if svc.get("privileged") is True:
             return False, f"Service '{svc_name}' specifies prohibited 'privileged: true'."
 
-        net_mode = str(svc.get("network_mode", "")).strip().lower()
-        if net_mode == "host":
-            return False, f"Service '{svc_name}' specifies prohibited 'network_mode: host'."
+        cap_add = svc.get("cap_add")
+        if cap_add:
+            return False, f"Service '{svc_name}' specifies prohibited 'cap_add' capabilities: {cap_add}."
+
+        devices = svc.get("devices")
+        if devices:
+            return False, f"Service '{svc_name}' specifies prohibited host device mount: {devices}."
+
+        sec_opts = svc.get("security_opt", [])
+        if isinstance(sec_opts, list):
+            for opt in sec_opts:
+                if any(bad in str(opt).lower() for bad in ("unconfined", "disable")):
+                    return False, f"Service '{svc_name}' specifies prohibited security_opt: {opt}."
+
+        for ns_key in ("network_mode", "pid", "ipc", "uts", "userns_mode"):
+            val = str(svc.get(ns_key, "")).strip().lower()
+            if val in PROHIBITED_HOST_NAMESPACES:
+                return False, f"Service '{svc_name}' specifies prohibited host namespace '{ns_key}: {val}'."
 
         volumes = svc.get("volumes", [])
         if isinstance(volumes, list):
@@ -345,16 +396,31 @@ def validate_compose_security(compose_file: Path, allowed_root: Path) -> tuple[b
                     if vol.get("type") == "bind":
                         host_path = src
 
-                # Evaluate host_path escapes
-                if host_path and host_path.startswith(("/", "~")):
+                if not host_path:
+                    continue
+
+                # Declared top-level named volume without path separators
+                if host_path in top_volumes and not (host_path.startswith((".", "/", "~")) or "/" in host_path or "\\" in host_path):
+                    continue
+
+                # Host bind mount evaluation
+                if host_path.startswith("~"):
                     expanded = Path(host_path).expanduser().resolve()
-                    # Allowed if inside the workload directory or inside the state root
-                    is_in_workload = allowed_root.is_dir() and expanded.is_relative_to(allowed_root.resolve())
-                    is_in_state = state_root.is_dir() and expanded.is_relative_to(state_root)
-                    if not (is_in_workload or is_in_state):
-                        return False, f"Service '{svc_name}' specifies prohibited host bind mount: '{host_path}'."
+                elif Path(host_path).is_absolute():
+                    expanded = Path(host_path).resolve()
+                else:
+                    # Relative path resolved against workload root
+                    expanded = (allowed_root / host_path).resolve()
+
+                # Containment check: strictly within workload directory or dedicated state root
+                is_in_workload = allowed_root.is_dir() and expanded.is_relative_to(canonical_allowed_root)
+                is_in_own_state = expanded.is_relative_to(target_state_root)
+
+                if not (is_in_workload or is_in_own_state):
+                    return False, f"Service '{svc_name}' specifies prohibited host bind mount: '{host_path}'."
 
     return True, None
+
 
 
 def validate_manifest_deployment(manifest: dict) -> tuple[bool, str]:
