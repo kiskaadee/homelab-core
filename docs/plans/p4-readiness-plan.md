@@ -117,11 +117,17 @@ Every client (local CLI, remote CLI, GitOps dispatcher, and future Operations UI
    • platform.health
 ```
 
-### B. Typed Request and Response Models (Pydantic v2 Validation Pipeline)
+### B. Typed Request and Response Models (Target Architecture: Pydantic v2 Pipeline)
 
-All control plane API requests, responses, error payloads, and workload manifest schemas are defined and validated through **Pydantic v2** (`pydantic.BaseModel`, `pydantic.Field`, `ConfigDict(extra="forbid")`):
-- **Runtime Validation**: Incoming payloads over both Unix Domain Socket and HTTP endpoints are validated at the transport boundary before reaching the operational router.
-- **Fail-Closed Type Safety**: Unrecognized fields, malformed types, or invalid operations immediately fail validation with structured `ERR_VALIDATION_FAILED` (400) payloads.
+All control plane API requests, responses, error payloads, and workload manifest schemas will be defined and validated through **Pydantic v2** (`pydantic.BaseModel`, `pydantic.Field`, `ConfigDict(extra="forbid", strict=True)`). While the dependency has been integrated into runtime environments, the schema migration and model definitions are the first implementation deliverables of Milestone P4:
+
+- **Runtime Validation Boundary**: Incoming payloads over both Unix Domain Socket and HTTP endpoints are validated at the transport boundary before reaching the operational router.
+- **Fail-Closed Extra Fields (`extra="forbid"`)**: Rejects any undeclared or unknown fields immediately.
+- **Strict Typing vs. Coercion Rules**:
+  - *Strict Validation*: Operations (`operation`), target identifiers (`target`), boolean flags (`recreate`, `remove_orphans`, `visible`, `auth`), and authentication tokens require strict types (`strict=True` or `StrictStr`, `StrictBool`). Coercion (e.g. converting `"true"` or `1` to `True`, or floats to ints) is strictly forbidden for control plane commands to prevent ambiguous execution.
+  - *Permitted Coercion / Sanitization*: Only explicitly defined string stripping/normalization (e.g. whitespace trimming) is permitted via field validators.
+- **Structured Error Transformation**: Transport handlers intercept `pydantic.ValidationError` and map it to canonical `ERR_VALIDATION_FAILED` (`400 Bad Request`) responses.
+- **Information Disclosure Prevention**: Error details must include field names and validation issue descriptions, but must strictly redact and omit raw input values to prevent leaking secrets, credentials, or host filesystem paths.
 - **Contract Enforcement**: Manifest definitions in `core_manifest.py` migrate to Pydantic v2 models, guaranteeing uniform schema enforcement across the CLI, daemon, and GitOps engines.
 
 All requests and responses use strict JSON payloads with explicit schema versioning (`version: "1.0"`):
@@ -248,8 +254,13 @@ Following the pattern established in Milestone P2 for `homelab-gitops.service`, 
 ### C. Platform Genericism & Domain Decoupling
 Per Invariant #8 in `AGENTS.md`, the control plane and all platform components must remain strictly instance-agnostic:
 - **No Hardcoded Domains**: Personal domain names (e.g. `roadtotech.me`) must never appear hardcoded in Python modules, NixOS definitions, or default configurations.
-- **Dynamic Resolution**: Domains must resolve exclusively through `HOMELAB_DOMAIN`, `DOMAIN_SUFFIX`, or `DOMAIN` environment variables.
-- **Generic Fallbacks & Tests**: Test fixtures, documentation examples, and schema defaults must use RFC-reserved generic domains (`example.com`, `example.org`, `testdomain.local`).
+- **Canonical Precedence & Dynamic Resolution**: All domain resolutions follow strict, fail-closed precedence:
+  1. `HOMELAB_DOMAIN` (Primary platform apex domain)
+  2. `DOMAIN_SUFFIX` (Secondary routing suffix fallback)
+  3. `DOMAIN` (Legacy environment fallback)
+  If none are set, the platform fails closed rather than defaulting to hardcoded values.
+- **Generic Placeholders & Test Fixtures**: Test fixtures, documentation examples, and schema defaults must use RFC 2606 reserved domains (`example.com`, `example.org`, `example.test`).
+
 
 ---
 
@@ -325,4 +336,5 @@ Before marking Milestone P4 complete, the following automated regression suite m
 | **Truthful Error Reporting** | `test_execution_failure_audit`: Mock failing Docker compose run (exit 1). Assert daemon returns `ERR_EXECUTION_FAILED` (500) and records `phase: FAILED` in audit log. | Reject PR |
 | **Audit Persistence Gate** | `test_audit_failure_blocks_mutation`: Mock read-only audit log. Assert mutating command fails closed with zero Docker invocations. | Block Release |
 | **Daemon Crash Recovery** | `test_daemon_restart_preserves_state`: Kill and restart `homelab-appctl.service`. Assert running container stacks are undisturbed and desired Git state remains intact. | Reject PR |
-| **Existing Invariant Regression** | Run `./scripts/test`: All 86 existing unit, security, and nix flake tests pass with 0 regressions. | Block Merge |
+| **Existing Invariant Regression** | Run `./scripts/test`: All 121 existing unit, security, structural, and Nix flake sandbox tests pass with 0 regressions. | Block Merge |
+
