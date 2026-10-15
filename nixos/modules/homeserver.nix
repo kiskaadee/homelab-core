@@ -66,7 +66,15 @@
     wants = [ "network-online.target" ];
     wantedBy = [ "multi-user.target" ];
 
-    path = with pkgs; [ git docker docker-compose python3 coreutils bash openssh ];
+    path = with pkgs; [
+      git
+      docker
+      docker-compose
+      (python3.withPackages (ps: with ps; [ pyyaml pydantic ]))
+      coreutils
+      bash
+      openssh
+    ];
 
     environment = {
       GITOPS_SECRET_FILE = config.sops.secrets."gitops/webhook_secret".path;

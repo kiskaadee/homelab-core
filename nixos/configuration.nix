@@ -127,9 +127,10 @@
     # Secrets tooling (required for sops-nix secret decryption and manual re-encryption)
     sops
     age
-    # Python runtime (hard requirement for appctl and gitops_dispatcher.py)
+    # Python runtime (hard requirement for appctl, core_manifest, and gitops_dispatcher.py)
     (python3.withPackages (ps: with ps; [
       pyyaml
+      pydantic
     ]))
     # Modern shell utilities
     eza        # ls replacement
