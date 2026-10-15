@@ -21,8 +21,9 @@ x 2026-10-15 (A) Wire app_name and harden compose validator for env_file and und
 x 2026-10-15 (B) Scrub hardcoded domain defaults across scripts and tests enforcing instance-agnostic parameterization +generic @core
 x 2026-10-15 (A) De-tautologize appctl env injection test to execute scripts/appctl directly with mock docker in tests/security/test_security_invariants.py +test @security
 x 2026-10-15 (A) Clarify Pydantic v2 target architecture, strict typing rules, and domain precedence in docs/plans/p4-readiness-plan.md +docs @p4-gate
-(A) Migrate core_manifest.py to Pydantic v2 models for strict type validation and serialization +manifest @schema
+x 2026-10-15 (A) Migrate core_manifest.py to Pydantic v2 models for strict type validation and serialization +manifest @schema
 (A) Scaffold asyncio daemon server with Pydantic request/response models supporting dual transports in scripts/appctl_daemon.py +daemon @p4
+
 (A) Implement unit and integration tests for dual-transport requests and error handling in tests/unit/test_appctl_daemon.py +test @p4
 (B) Implement command-oriented operational router wiring domain actions to in-process appctl_engine.py methods and fixed subprocess executions +router @p4
 (B) Implement token authentication middleware validating user-scoped Bearer tokens for mutating requests +auth @p4

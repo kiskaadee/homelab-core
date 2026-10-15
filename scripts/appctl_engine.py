@@ -120,8 +120,17 @@ class SitesApp(App):
         """Serialize for JSON consumption by scripts/appctl"""
         data = asdict(self)
         data.pop("manifest_obj", None)
+        if hasattr(self.source, "to_dict"):
+            data["source"] = self.source.to_dict()
+        elif hasattr(self.source, "model_dump"):
+            data["source"] = self.source.model_dump()
+        if hasattr(self.homepage, "to_dict"):
+            data["homepage"] = self.homepage.to_dict()
+        elif hasattr(self.homepage, "model_dump"):
+            data["homepage"] = self.homepage.model_dump()
         data["type"] = getattr(self, "app_type", "app")
         return data
+
 
 
 def sites_app_from_manifest(

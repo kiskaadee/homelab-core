@@ -217,3 +217,43 @@ env:
     assert manifest.env["CUSTOM_PORT_1"] == "8080"
     assert manifest.env["_INTERNAL_FLAG"] == "true"
 
+
+def test_parse_manifest_rejects_extra_fields():
+    """Ensure extra='forbid' rejects unrecognized top-level manifest keys."""
+    raw_yaml = """
+name: "app"
+unrecognized_field: "should_fail"
+"""
+    with pytest.raises(ManifestValidationError, match="unrecognized or forbidden field"):
+        parse_manifest(raw_yaml)
+
+
+def test_parse_manifest_rejects_extra_fields_in_nested_blocks():
+    """Ensure extra='forbid' rejects unrecognized keys in nested configuration blocks."""
+    raw_yaml = """
+name: "app"
+deployment:
+  strategy: compose
+  unknown_deploy_option: "forbidden"
+"""
+    with pytest.raises(ManifestValidationError):
+        parse_manifest(raw_yaml)
+
+
+def test_manifest_pydantic_serialization():
+    """Ensure Manifest operates as a Pydantic v2 model with correct serialization."""
+    from pydantic import BaseModel
+
+    raw_yaml = """
+name: "serialized-app"
+domain: "app.example.test"
+description: "Pydantic serialization test"
+"""
+    manifest = parse_manifest(raw_yaml)
+    assert isinstance(manifest, BaseModel)
+    dumped = manifest.model_dump(by_alias=True)
+    assert dumped["name"] == "serialized-app"
+    assert dumped["schemaVersion"] == "1.0"
+    assert manifest.to_dict()["name"] == "serialized-app"
+
+

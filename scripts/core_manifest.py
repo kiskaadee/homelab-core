@@ -2,20 +2,29 @@
 core_manifest.py — Authoritative Workload Manifest Schema (v1.0) & Parser Library
 
 Governs the contract for all ~/Sites workloads:
-- Strongly-typed dataclass representations (Manifest, SourceConfig, DeploymentConfig, HomepageConfig)
+- Strongly-typed Pydantic v2 representations (Manifest, SourceConfig, DeploymentConfig, HomepageConfig)
 - Strict source transport scheme validation (https://, ssh://, git@)
 - Explicit ref classification (moving branches vs. pinned tags vs. commit SHAs)
 - Workload classification: Class A (Source-Backed) vs. Class B (Image-Only)
+- Fail-closed schema enforcement with ConfigDict(extra="forbid")
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 try:
     import yaml
@@ -142,14 +151,40 @@ def classify_ref(ref_str: str) -> tuple[RefType, str]:
     return RefType.BRANCH, ref
 
 
-@dataclass
-class SourceConfig:
+class SourceConfig(BaseModel):
     """Upstream source provenance descriptor."""
+    model_config = ConfigDict(extra="forbid")
+
     url: str
     ref: str = "main"
     type: str = "git"
     ref_type: RefType = RefType.BRANCH
     transport: TransportScheme = TransportScheme.HTTPS
+
+    @model_validator(mode="before")
+    @classmethod
+    def validate_source(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            src_type = str(data.get("type", "git")).strip().lower()
+            if src_type != "git":
+                raise ManifestValidationError(f"Unsupported source type '{src_type}'. Only 'git' is supported.")
+            data["type"] = src_type
+
+            raw_url = data.get("url")
+            if raw_url is not None:
+                transport, validated_url = validate_transport(str(raw_url))
+                data["url"] = validated_url
+                if "transport" not in data or data["transport"] is None:
+                    data["transport"] = transport
+
+            raw_ref = data.get("ref", "main")
+            if raw_ref is not None:
+                ref_type, clean_ref = classify_ref(str(raw_ref))
+                data["ref"] = clean_ref
+                if "ref_type" not in data or data["ref_type"] is None:
+                    data["ref_type"] = ref_type
+
+        return data
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -161,48 +196,155 @@ class SourceConfig:
         }
 
 
-@dataclass
-class DeploymentConfig:
+class DeploymentConfig(BaseModel):
     """Continuous deployment strategy and action policy."""
+    model_config = ConfigDict(extra="forbid")
+
     strategy: str = "compose"
     branch: str = "main"
-    actions: list[str] = field(default_factory=lambda: ["git_pull", "compose_up"])
+    actions: list[str] = Field(default_factory=lambda: ["git_pull", "compose_up"])
+
+    @field_validator("strategy", mode="before")
+    @classmethod
+    def validate_strategy(cls, v: Any) -> str:
+        clean = str(v).strip().lower()
+        if clean not in ALLOWED_STRATEGIES:
+            raise ManifestValidationError(
+                f"Unsupported deployment strategy '{clean}'. Allowed: {sorted(ALLOWED_STRATEGIES)}"
+            )
+        return clean
+
+    @field_validator("actions", mode="before")
+    @classmethod
+    def validate_actions(cls, v: Any) -> list[str]:
+        if isinstance(v, list):
+            actions: list[str] = []
+            for act in v:
+                act_str = str(act).strip().lower()
+                if act_str not in ALLOWED_ACTIONS:
+                    raise ManifestValidationError(
+                        f"Prohibited deployment action '{act_str}'. Allowed: {sorted(ALLOWED_ACTIONS)}"
+                    )
+                actions.append(act_str)
+            if not actions:
+                return ["compose_up"]
+            return actions
+        return ["compose_up"]
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return self.model_dump(mode="python")
 
 
-@dataclass
-class HomepageConfig:
+class HomepageConfig(BaseModel):
     """Dashboard card metadata for Homepage."""
+    model_config = ConfigDict(extra="forbid")
+
     title: str
     group: str = "Applications"
     icon: str = "default.png"
     container: str = ""
     weight: int = 50
 
+    @field_validator("weight", mode="before")
+    @classmethod
+    def normalize_weight(cls, v: Any) -> int:
+        try:
+            return int(v)
+        except (ValueError, TypeError):
+            return 50
+
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return self.model_dump(mode="python")
 
 
-@dataclass
-class Manifest:
+class Manifest(BaseModel):
     """
     Authoritative Workload Manifest Model (Schema v1.0).
     Represents the full contract declared in a workload's app.yaml.
     """
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     name: str
-    schema_version: str = "1.0"
+    schema_version: str = Field(default="1.0", alias="schemaVersion")
     domain: str = ""
     description: str = ""
-    aliases: list[str] = field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
     visible: bool = True
     auth: bool = True
-    networks: list[str] = field(default_factory=lambda: ["proxy-net"])
-    env: dict[str, Any] = field(default_factory=dict)
-    deployment: DeploymentConfig = field(default_factory=DeploymentConfig)
+    networks: list[str] = Field(default_factory=lambda: ["proxy-net"])
+    env: dict[str, str] = Field(default_factory=dict)
+    deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
     source: SourceConfig | None = None
     homepage: HomepageConfig | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def prepare_manifest(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            raw_name = data.get("name")
+            if raw_name is None or not isinstance(raw_name, str) or not raw_name.strip():
+                raise ManifestValidationError("Manifest is missing mandatory string field 'name'.")
+            clean_name = raw_name.strip()
+            if not NAME_RE.match(clean_name):
+                raise ManifestValidationError(
+                    f"Invalid workload name '{clean_name}'. Must be alphanumeric with optional '.' '_' '-', starting with alphanumeric."
+                )
+            data["name"] = clean_name
+
+            # Source: treat empty dict or missing url as None
+            src = data.get("source")
+            if isinstance(src, dict) and not src.get("url"):
+                data["source"] = None
+
+            # Homepage default propagation
+            hp = data.get("homepage")
+            if isinstance(hp, dict):
+                hp.setdefault("title", clean_name)
+                hp.setdefault("container", clean_name)
+
+        return data
+
+    @field_validator("visible", "auth", mode="before")
+    @classmethod
+    def cast_bool(cls, v: Any) -> bool:
+        if v is None:
+            return True
+        return bool(v)
+
+    @field_validator("aliases", mode="before")
+    @classmethod
+    def normalize_aliases(cls, v: Any) -> list[str]:
+
+        if isinstance(v, str):
+            return [v.strip()] if v.strip() else []
+        if isinstance(v, list):
+            return [str(a).strip() for a in v if isinstance(a, str) and str(a).strip()]
+        return []
+
+    @field_validator("networks", mode="before")
+    @classmethod
+    def normalize_networks(cls, v: Any) -> list[str]:
+        if isinstance(v, list):
+            clean = [str(n).strip() for n in v if str(n).strip()]
+            if clean:
+                return clean
+        return ["proxy-net"]
+
+    @field_validator("env", mode="before")
+    @classmethod
+    def validate_env(cls, v: Any) -> dict[str, str]:
+        if not isinstance(v, dict):
+            return {}
+        env: dict[str, str] = {}
+        for raw_k, raw_v in v.items():
+            k_str = str(raw_k).strip()
+            if not ENV_KEY_RE.match(k_str) or k_str in RESERVED_ENV_KEYS:
+                raise ManifestValidationError(
+                    f"Invalid or reserved environment variable key '{k_str}'. "
+                    f"Keys must match ^[a-zA-Z_][a-zA-Z0-9_]*$ and cannot be reserved."
+                )
+            env[k_str] = str(raw_v) if raw_v is not None else ""
+        return env
 
     @property
     def is_class_a(self) -> bool:
@@ -277,141 +419,22 @@ def parse_manifest(raw_input: str | Path | dict[str, Any]) -> Manifest:
     if not isinstance(data, dict):
         raise ManifestValidationError("Manifest root must be a YAML dictionary mapping.")
 
-    # 1. Name validation
-    raw_name = data.get("name")
-    if not raw_name or not isinstance(raw_name, str):
-        raise ManifestValidationError("Manifest is missing mandatory string field 'name'.")
-    name = raw_name.strip()
-    if not NAME_RE.match(name):
-        raise ManifestValidationError(
-            f"Invalid workload name '{name}'. Must be alphanumeric with optional '.' '_' '-', starting with alphanumeric."
-        )
-
-    # 2. Schema Version
-    schema_version = str(data.get("schemaVersion", "1.0")).strip()
-
-    # 3. Domain & Description
-    domain = str(data.get("domain", "")).strip()
-    description = str(data.get("description", "")).strip()
-
-    # 4. Aliases
-    aliases_raw = data.get("aliases", [])
-    aliases: list[str] = []
-    if isinstance(aliases_raw, str):
-        aliases = [aliases_raw.strip()]
-    elif isinstance(aliases_raw, list):
-        for a in aliases_raw:
-            if isinstance(a, str) and a.strip():
-                aliases.append(a.strip())
-
-    # 5. Flags (visible, auth)
-    visible = bool(data.get("visible", True))
-    auth = bool(data.get("auth", True))
-
-    # 6. Networks
-    networks_raw = data.get("networks", ["proxy-net"])
-    networks: list[str] = []
-    if isinstance(networks_raw, list):
-        networks = [str(n).strip() for n in networks_raw if str(n).strip()]
-    if not networks:
-        networks = ["proxy-net"]
-
-    # 7. Environment overrides
-    env_raw = data.get("env", {})
-    env: dict[str, str] = {}
-    if isinstance(env_raw, dict):
-        for raw_k, raw_v in env_raw.items():
-            k_str = str(raw_k).strip()
-            if not ENV_KEY_RE.match(k_str) or k_str in RESERVED_ENV_KEYS:
-                raise ManifestValidationError(
-                    f"Invalid or reserved environment variable key '{k_str}'. "
-                    f"Keys must match ^[a-zA-Z_][a-zA-Z0-9_]*$ and cannot be reserved."
-                )
-            env[k_str] = str(raw_v) if raw_v is not None else ""
-
-    # 8. Deployment Policy
-    deployment_raw = data.get("deployment")
-    deployment = DeploymentConfig()
-    if isinstance(deployment_raw, dict):
-        strategy = str(deployment_raw.get("strategy", "compose")).strip().lower()
-        if strategy not in ALLOWED_STRATEGIES:
-            raise ManifestValidationError(
-                f"Unsupported deployment strategy '{strategy}'. Allowed: {sorted(ALLOWED_STRATEGIES)}"
-            )
-
-        branch = str(deployment_raw.get("branch", "main")).strip()
-        actions_raw = deployment_raw.get("actions", ["compose_up"])
-        actions: list[str] = []
-        if isinstance(actions_raw, list):
-            for act in actions_raw:
-                act_str = str(act).strip().lower()
-                if act_str not in ALLOWED_ACTIONS:
-                    raise ManifestValidationError(
-                        f"Prohibited deployment action '{act_str}'. Allowed: {sorted(ALLOWED_ACTIONS)}"
-                    )
-                actions.append(act_str)
-        if not actions:
-            actions = ["compose_up"]
-
-        deployment = DeploymentConfig(strategy=strategy, branch=branch, actions=actions)
-
-    # 9. Source Provenance (Class A vs Class B)
-    source_raw = data.get("source")
-    source: SourceConfig | None = None
-    if isinstance(source_raw, dict) and source_raw.get("url"):
-        raw_url = str(source_raw.get("url", "")).strip()
-        transport, validated_url = validate_transport(raw_url)
-
-        raw_ref = str(source_raw.get("ref", "main")).strip()
-        ref_type, clean_ref = classify_ref(raw_ref)
-
-        src_type = str(source_raw.get("type", "git")).strip().lower()
-        if src_type != "git":
-            raise ManifestValidationError(f"Unsupported source type '{src_type}'. Only 'git' is supported.")
-
-        source = SourceConfig(
-            url=validated_url,
-            ref=clean_ref,
-            type=src_type,
-            ref_type=ref_type,
-            transport=transport,
-        )
-
-    # 10. Homepage configuration
-    homepage_raw = data.get("homepage")
-    homepage: HomepageConfig | None = None
-    if isinstance(homepage_raw, dict):
-        title = str(homepage_raw.get("title", name)).strip()
-        group = str(homepage_raw.get("group", "Applications")).strip()
-        icon = str(homepage_raw.get("icon", "default.png")).strip()
-        container = str(homepage_raw.get("container", name)).strip()
-        try:
-            weight = int(homepage_raw.get("weight", 50))
-        except (ValueError, TypeError):
-            weight = 50
-
-        homepage = HomepageConfig(
-            title=title,
-            group=group,
-            icon=icon,
-            container=container,
-            weight=weight,
-        )
-
-    return Manifest(
-        name=name,
-        schema_version=schema_version,
-        domain=domain,
-        description=description,
-        aliases=aliases,
-        visible=visible,
-        auth=auth,
-        networks=networks,
-        env=env,
-        deployment=deployment,
-        source=source,
-        homepage=homepage,
-    )
+    try:
+        return Manifest.model_validate(data)
+    except ValidationError as e:
+        for err in e.errors():
+            ctx = err.get("ctx", {})
+            orig_err = ctx.get("error")
+            if isinstance(orig_err, ManifestValidationError):
+                raise orig_err from e
+        first_error = e.errors()[0]
+        msg = first_error.get("msg", str(e))
+        if msg.startswith("Value error, "):
+            msg = msg.removeprefix("Value error, ")
+        loc = ".".join(str(p) for p in first_error.get("loc", []))
+        if loc and first_error.get("type") == "extra_forbidden":
+            raise ManifestValidationError(f"Manifest contains unrecognized or forbidden field '{loc}'.") from e
+        raise ManifestValidationError(msg) from e
 
 
 def _parse_yaml_basic(content: str) -> dict[str, Any]:

@@ -10,14 +10,28 @@ In accordance with platform governance, authoritative ADRs are maintained in the
 
 | Decision Record | Status | Date | Scope & One-Line Purpose |
 | :--- | :--- | :--- | :--- |
+| [**Centralized Runtime Validation & Serialization via Pydantic v2**](0003-pydantic-v2-runtime-validation.md) | `accepted` | 2026-10-15 | Adopts Pydantic v2 as the single runtime schema and validation authority across workload manifests and daemon API to enforce fail-closed type safety, strict schema-based boundaries, and secret-safe serialization. |
 | [**Homelab Operational Control Plane & Deployment Model Architecture**](#homelab-operational-control-plane--deployment-model-architecture) | `accepted` | 2026-10-07 | Establishes `appctl` as the central operational control plane daemon, one logical API across dual transports (Unix socket and HTTP), explicit token authentication on host, Git as authoritative deployment state, the 5-stage model lifecycle, AI proposal boundaries, and append-only audit telemetry. |
 | [**Homelab 3-Tier Architecture & Deployment Provenance Model**](#homelab-3-tier-architecture--deployment-provenance-model) | `accepted` | 2026-09-28 | Establishes 3-tier separation (Software, OCI Artifact, Sites Deployment, Core Platform), two workload classes (Source-Backed vs. Image-Only), isolated state root (`~/var/lib/homelab/<app>/`), and two operational inspection axes. |
+
 
 ---
 
 ## 🧭 Summaries of Governing Decisions
 
+### Centralized Runtime Validation & Serialization via Pydantic v2
+* **Canonical Document**: [`0003-pydantic-v2-runtime-validation.md`](0003-pydantic-v2-runtime-validation.md)
+* **Status**: `accepted` (Active)
+* **Governing Implementation Plan**: [ROADMAP.md](../../ROADMAP.md) (Milestone P4)
+* **Core Commitments**:
+  1. **Single Schema & Validation Layer**: Workload manifests (`core_manifest.py`) and API command models inherit from `pydantic.BaseModel`.
+  2. **Fail-Closed Extra Fields (`extra="forbid"`)**: Immediate rejection of unexpected or undocumented payload properties.
+  3. **Strict Typing Policy (`strict=True`)**: Coercion forbidden on operations, targets, identifiers, and flags.
+  4. **Secret-Safe Error Transformation**: Transport-level conversion of `ValidationError` into standard `ERR_VALIDATION_FAILED` (400) with raw input values redacted.
+  5. **Dual-Transport Parity**: Identical validated models across Unix domain socket and HTTP transports.
+
 ### Homelab Operational Control Plane & Deployment Model Architecture
+
 * **Canonical Document**: `03-records/decisions/homelab-appctl-control-plane-architecture.md`
 * **Status**: `accepted` (Active)
 * **Governing Implementation Plan**: [ROADMAP.md](../../ROADMAP.md) (Roadmap v5)
