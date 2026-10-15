@@ -1,6 +1,6 @@
 # ⚡ Homelab Core — GitOps Continuous Deployment Engine
 
-Homelab Core includes an automated GitOps deployment engine implemented in [`scripts/gitops_dispatcher.py`](../scripts/gitops_dispatcher.py). It processes Git push webhooks from Gitea (or external Git forges) and executes declared deployment actions for workloads in `~/Sites` or data vaults (such as `~/Brain`).
+Homelab Core includes an automated GitOps deployment engine implemented in [`scripts/gitops_dispatcher.py`](../scripts/gitops_dispatcher.py). It processes Git push webhooks from Gitea (or external Git forges) and executes declared deployment actions strictly for admitted application workloads in `~/Sites`.
 
 ---
 
@@ -26,9 +26,9 @@ The GitOps engine is invoked via the `homelab-gitops.service` systemd unit runni
                                  │
                                  ▼
          ┌───────────────────────────────────────────────┐
-         │ 3. Canonical Repository Identity Resolution   │
-         │    Maps logical names to trusted local paths  │
-         │    Rejects path traversal & symlink escapes   │
+         │ 3. Authoritative Registry Resolution          │
+         │    Maps names via Core/config/deployments.yaml│
+         │    Fails closed; zero dynamic discovery on host│
          └───────────────────────┬───────────────────────┘
                                  │
                                  ▼
@@ -53,7 +53,8 @@ The GitOps engine is invoked via the `homelab-gitops.service` systemd unit runni
          ┌───────────────────────────────────────────────┐
          │ 7. Revision-Consistent Validation & Execution │
          │    git pull -> re-validate manifest on-tree   │
-         │    Execute allowlisted actions -> write status│
+         │    Compose AST security validator (containment│
+         │    & privilege checks) -> compose up -> status│
          └───────────────────────────────────────────────┘
 ```
 
@@ -71,13 +72,13 @@ The GitOps engine is invoked via the `homelab-gitops.service` systemd unit runni
 * Signatures are verified using HMAC-SHA256 with `hmac.compare_digest` against the shared secret stored in `nixos/secrets.yaml` (projected to `/run/secrets/gitops/webhook_secret`).
 * Missing, empty, or mismatched signatures are rejected.
 
-### C. Trusted Repository Resolution
-* Webhook payloads identify targets by logical name (e.g. `docs`, `homelab-docs`), never by raw filesystem path.
-* The engine resolves names against a trusted mapping derived from:
-  1. Authoritative Data Vaults (`~/Brain` via aliases `second-brain`, `Brain`, `brain`).
-  2. Workload directories in `~/Sites` by parsing `app.yaml`.
-* **Input Validation**: Names must match `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`. Slashes, backslashes, and `..` are rejected.
-* **Containment Check**: Resolved target paths must reside within `~/Sites` or `~/Brain`. Symlinks pointing outside these roots are rejected.
+### C. Authoritative Repository Registry (`deployments.yaml`)
+* Webhook payloads identify targets strictly by logical name (e.g. `docs`, `homelab-docs`), never by raw filesystem path.
+* `Core/config/deployments.yaml` is the **sole admission authority** for GitOps workloads.
+* **No Dynamic Discovery**: Scanning `~/Sites` dynamically is strictly prohibited. An unapproved directory created on disk cannot receive webhook deployment rights merely by providing an `app.yaml`.
+* **Fail-Closed Guarantee**: If `deployments.yaml` is missing, unreadable, or malformed, the dispatcher fails closed and admits zero repositories.
+* **Input Validation**: Names must match `^[a-zA-Z0-9][a-zA-Z0-9._-]*$`. Slashes, backslashes, and path traversal sequences (`..`) are rejected.
+* **Containment Check**: Declared repository paths must resolve strictly within `~/Sites`. Paths escaping `~/Sites` are rejected during registry loading.
 
 ### D. Revision-Consistent Manifest Validation
 * When a webhook is admitted, an initial policy check verifies that the pushed branch matches the declared `deployment.branch`.
@@ -85,7 +86,20 @@ The GitOps engine is invoked via the `homelab-gitops.service` systemd unit runni
 * The engine **re-reads and re-validates `app.yaml` from the newly pulled working tree** before running subsequent container actions (`compose_up`, `compose_build`, etc.).
 * If the pulled commit introduces an invalid action, unsupported strategy, or changes the target branch away from the pushed branch, deployment is aborted.
 
+### E. Compose AST Security Validation
+Before executing `docker compose up -d`, `validate_compose_security()` parses the application's Compose file and enforces platform security invariants:
+* **File Integrity**: `docker-compose.yml` and `app.yaml` must be regular files, not symlinks escaping the workload root.
+* **Privilege Containment**: Rejects `privileged: true`, `cap_add` capabilities, `devices` mounts, and `security_opt: ["apparmor:unconfined"]`.
+* **Namespace Isolation**: Rejects host namespaces (`network_mode: host`, `pid: host`, `ipc: host`, `uts: host`, `userns_mode: host`).
+* **Docker Socket Ban**: Rejects direct bind mounts of `/var/run/docker.sock` (reserved exclusively for Core `socket-proxy:ro`).
+* **Top-Level Directives**: Rejects top-level `include:` directives to prevent out-of-tree file inclusions.
+* **Bind-Mount & State Isolation**:
+  - Resolves all bind mounts (both relative and absolute) against the authorized workload directory.
+  - Bind mounts are strictly restricted to **either** the workload root (`~/Sites/<app>/`) **or** the dedicated per-workload persistent state root (`~/var/lib/homelab/<app>/`).
+  - Cross-tenant mounts (mounting another application's directory under `~/var/lib/homelab/`) are rejected fail-closed.
+
 ---
+
 
 ## 3. Asynchronous Queueing, Serialization & Superseding
 
