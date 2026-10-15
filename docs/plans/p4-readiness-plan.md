@@ -46,8 +46,8 @@ This plan resolves the six architectural prerequisites necessary to implement P4
 | :--- | :--- | :--- | :--- |
 | [`scripts/appctl`](../../scripts/appctl) | Bash | **Active CLI Client** | CLI entry point; secret environment sourcing (`homeserver.env`, `traefik-deployments.env`); resolves metadata via engine; directly runs `docker compose` and `git pull` subprocesses. |
 | [`scripts/appctl_engine.py`](../../scripts/appctl_engine.py) | Python 3 | **Authoritative Engine** | Domain models (`SitesApp`, `CoreService`); schema v1.0 parsing (`core_manifest.py`); two-axis inspection (`provenance.py`); SSL cert inspection; Homepage compilation; metadata serialization (`resolve`). |
-| [`scripts/appctl_engine_v2.py`](../../scripts/appctl_engine_v2.py) | Python 3 | **Compatibility Shim** | Thin backward-compatibility wrapper re-exporting all symbols from `appctl_engine.py`. No unique domain logic. |
 | [`scripts/core_manifest.py`](../../scripts/core_manifest.py) | Python 3 | **Schema Library** | Strongly-typed Manifest dataclasses; transport validation (`https://`, `ssh://`, `git@`); ref semantics classification (`branch`, `tag`, `commit`). |
+
 | [`scripts/provenance.py`](../../scripts/provenance.py) | Python 3 | **Provenance Library** | Two-axis status engine; local checkout inspection (`git status`, commit SHA); bounded upstream query (`git ls-remote` with 10s timeout). |
 | [`scripts/gitops_dispatcher.py`](../../scripts/gitops_dispatcher.py) | Python 3 | **Independent Service** | Webhook listener (port 9000); HMAC validation; flock serialization; independent AST validation; executes its own `docker compose` and `git pull` subprocesses. |
 
@@ -84,7 +84,8 @@ This plan resolves the six architectural prerequisites necessary to implement P4
 
 ### D. Architectural Findings & Migration Deductions
 
-1. **V1 Engine is Fully Superseded**: `scripts/appctl_engine.py` is now identical to the modern dataclass implementation. `scripts/appctl_engine_v2.py` is merely an alias and can be deprecated/retired once the daemon is active.
+1. **V1 Engine is Fully Superseded & V2 Shim Retired**: `scripts/appctl_engine.py` is the single authoritative metadata engine. The `scripts/appctl_engine_v2.py` compatibility shim has been retired.
+
 2. **Duplicated Operational Logic in GitOps**: `scripts/gitops_dispatcher.py` and `scripts/appctl` maintain **separate, duplicate implementations** of `git pull` and `docker compose up`. This violates Invariant #1 (*Single Operational Truth*). In P4, GitOps webhook handlers must delegate execution to the control-plane daemon via its internal client.
 3. **Environment Injection Vulnerability in Bash**: The current Bash CLI constructs shell exports dynamically using `eval "$(python3 ...)"`. The daemon replaces this subprocess string interpolation with in-process, typed dictionary manipulation.
 
