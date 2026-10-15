@@ -378,3 +378,88 @@ def test_resolve_core_stack_type():
     assert traefik is not None
     assert traefik.to_dict()["type"] == "core_service"
     assert traefik.container == "traefik"
+
+
+def test_manifest_parsing_delegates_to_core_manifest_and_validates_env(app_factory: AppFactory):
+    """Ensure manifest parsing uses core_manifest and catches invalid env keys."""
+    app_factory.create(
+        dir_name="homelab-badenv",
+        manifest_yaml="""
+        name: badenv
+        env:
+            PATH: /override/bin
+        """,
+    )
+    apps = engine.get_sites_apps()
+    app = engine.resolve_app("badenv", apps)
+    assert app is not None
+    assert app.manifest_error is not None
+    assert "Invalid or reserved environment variable key" in app.manifest_error
+
+
+def test_cmd_resolve_fails_closed_on_manifest_error(app_factory: AppFactory, capsys: pytest.CaptureFixture):
+    """Ensure cmd_resolve exits with non-zero on workload with manifest errors."""
+    app_factory.create(
+        dir_name="homelab-corrupt",
+        manifest_yaml="""
+        name: corrupt
+        env:
+            ILLEGAL-KEY: forbidden
+        """,
+    )
+    with pytest.raises(SystemExit) as exc_info:
+        engine.cmd_resolve(["corrupt"])
+    assert exc_info.value.code != 0
+    captured = capsys.readouterr()
+    assert "invalid manifest" in captured.err.lower() or "error" in captured.err.lower()
+
+
+def test_cmd_resolve_fails_closed_on_missing_app_yaml(mock_sites_dir: Path):
+    """Ensure cmd_resolve exits with non-zero if workload has no app.yaml."""
+    no_manifest_dir = mock_sites_dir / "homelab-nomanifest"
+    no_manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    with pytest.raises(SystemExit) as exc_info:
+        engine.cmd_resolve(["nomanifest"])
+    assert exc_info.value.code != 0
+
+
+def test_unification_uses_core_manifest_dataclasses(app_factory: AppFactory):
+    """Ensure SitesApp uses core_manifest SourceConfig and HomepageConfig."""
+    import core_manifest
+
+    app_factory.create(
+        dir_name="homelab-unified",
+        manifest_yaml="""
+        name: unified
+        source:
+            url: https://git.roadtotech.me/kiskaadee/unified.git
+            ref: v1.0.0
+        homepage:
+            title: Unified App
+            weight: 30
+        """,
+    )
+    apps = engine.get_sites_apps()
+    app = engine.resolve_app("unified", apps)
+    assert app is not None
+    assert isinstance(app.source, core_manifest.SourceConfig)
+    assert isinstance(app.homepage, core_manifest.HomepageConfig)
+    assert app.source.ref_type == core_manifest.RefType.TAG
+    assert app.source.transport == core_manifest.TransportScheme.HTTPS
+
+
+def test_cmd_list_flags_manifest_error(app_factory: AppFactory, capsys: pytest.CaptureFixture):
+    """Ensure cmd_list flags workloads with manifest errors instead of swallowing them."""
+    app_factory.create(
+        dir_name="homelab-broken",
+        manifest_yaml="""
+        name: broken
+        env:
+            SHELL: /bin/sh
+        """,
+    )
+    engine.cmd_list([])
+    captured = capsys.readouterr()
+    assert "Manifest Error" in captured.out
+

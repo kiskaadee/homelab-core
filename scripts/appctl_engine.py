@@ -19,7 +19,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from core_manifest import Manifest, ManifestValidationError, parse_manifest
+from core_manifest import (
+    HomepageConfig,
+    Manifest,
+    ManifestValidationError,
+    SourceConfig,
+    parse_manifest,
+)
 from provenance import (
     get_local_checkout_status,
     inspect_workload_two_axis,
@@ -64,39 +70,15 @@ def validate_environment() -> None:
         sys.exit(1)
 
 
-class ManifestError(Exception):
-    pass
-
-
-@dataclass
-class HomepageConfig:
-    title: str
-    group: str = "Applications"
-    icon: str = "default.png"
-    container: str = ""
-    weight: int = 50
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
-
-
-@dataclass
-class SourceConfig:
-    """Upstream source provenance descriptor."""
-    type: str = "git"              # "git"
-    url: str = ""                  # e.g., "https://git.roadtotech.me/kiskaadee/bitetrack.git"
-    ref: str = "main"              # Branch (e.g. "main"), tag (e.g. "v1.0.0"), or commit SHA
-
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+ManifestError = ManifestValidationError
 
 
 @dataclass
 class App:
     name: str                       # Canonical identifier (e.g., "traefik", "jellyfin")
-    description: str                # Human-readable summary for dashboards and CLI info
-    domain: str                     # Routing FQDN (e.g., "auth.roadtotech.me") or "internal".
-    dir_path: str                   # Filesystem directory (CORE_DIR for Core, or ~/Sites/<app> for Sites).
+    description: str = ""           # Human-readable summary for dashboards and CLI info
+    domain: str = ""                # Routing FQDN (e.g., "auth.roadtotech.me") or "internal".
+    dir_path: str = ""              # Filesystem directory (CORE_DIR for Core, or ~/Sites/<app> for Sites).
 
     @property
     def is_internal(self) -> bool:
@@ -131,116 +113,74 @@ class SitesApp(App):
     env: dict[str, Any] = field(default_factory=dict)   # Environment variable overrides
     homepage: HomepageConfig | None = None              # Dashboard Card Configuration
     manifest_error: str | None = None                   # Captured syntax/loading errors
+    manifest_obj: Manifest | None = None                # Parsed authoritative Manifest
     app_type: str = "app"
 
-
-def load_manifest(manifest_path: str) -> dict[str, Any]:
-    """Load and parse the app manifest file."""
-    if not os.path.isfile(manifest_path):
-        raise FileNotFoundError(f"Manifest file not found at {manifest_path}")
-
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as file:
-            manifest_data = yaml.safe_load(file) or {}
-    except (yaml.YAMLError, OSError) as err:
-        raise ManifestError(f"YAML parsing failed: {err}") from err
-
-    if not isinstance(manifest_data, dict):
-        raise ManifestError(f"Invalid manifest root: expected `dict`, got `{type(manifest_data).__name__}`")
-
-    return manifest_data
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for JSON consumption by scripts/appctl"""
+        data = asdict(self)
+        data.pop("manifest_obj", None)
+        data["type"] = getattr(self, "app_type", "app")
+        return data
 
 
 def sites_app_from_manifest(
     app_dir: str,
-    manifest: dict[str, Any],
+    manifest: Manifest | dict[str, Any] | None = None,
     manifest_error: str | None = None,
 ) -> SitesApp:
-    """Construct and normalize a SitesApp domain model from raw manifest data."""
+    """Construct and normalize a SitesApp domain model from an authoritative Manifest or raw data."""
     raw_dir_name = os.path.basename(app_dir)
-    canonical_name = str(manifest.get("name") or raw_dir_name.replace("homelab-", ""))
 
-    # Normalize aliases into list[str]
-    raw_aliases = manifest.get("aliases") or []
-    if isinstance(raw_aliases, str):
-        aliases = [raw_aliases]
-    elif isinstance(raw_aliases, list):
-        aliases = [str(alias) for alias in raw_aliases]
-    else:
-        aliases = []
-
-    # Homepage card normalization
-    homepage_config: HomepageConfig | None = None
-    raw_hp = manifest.get("homepage")
-    if isinstance(raw_hp, dict):
-        homepage_config = HomepageConfig(
-            title=str(raw_hp.get("title") or canonical_name),
-            group=str(raw_hp.get("group") or "Applications"),
-            icon=str(raw_hp.get("icon") or "default.png"),
-            container=str(raw_hp.get("container") or canonical_name),
-            weight=int(raw_hp.get("weight", 50)),
+    if isinstance(manifest, Manifest):
+        has_compose = (
+            os.path.isfile(os.path.join(app_dir, "docker-compose.yaml")) or
+            os.path.isfile(os.path.join(app_dir, "docker-compose.yml"))
+        )
+        canonical_name = manifest.name
+        domain = manifest.domain or f"{canonical_name}.{HOMELAB_DOMAIN}"
+        return SitesApp(
+            name=canonical_name,
+            dir_name=raw_dir_name,
+            source=manifest.source,
+            description=manifest.description,
+            domain=domain,
+            dir_path=app_dir,
+            has_compose=has_compose,
+            aliases=list(manifest.aliases),
+            visible=manifest.visible,
+            auth=manifest.auth,
+            networks=list(manifest.networks),
+            env=dict(manifest.env),
+            homepage=manifest.homepage,
+            manifest_error=manifest_error,
+            manifest_obj=manifest,
         )
 
-    has_compose = (
-        os.path.isfile(os.path.join(app_dir, "docker-compose.yaml")) or
-        os.path.isfile(os.path.join(app_dir, "docker-compose.yml"))
-    )
+    if isinstance(manifest, dict):
+        try:
+            parsed = parse_manifest(manifest)
+            return sites_app_from_manifest(app_dir, parsed, manifest_error)
+        except ManifestValidationError as err:
+            manifest_error = f"{manifest_error}; {err}" if manifest_error else str(err)
+            canonical_name = str(manifest.get("name") or raw_dir_name.replace("homelab-", ""))
+            return SitesApp(
+                name=canonical_name,
+                dir_name=raw_dir_name,
+                domain=f"{canonical_name}.{HOMELAB_DOMAIN}",
+                description=str(manifest.get("description", "")),
+                dir_path=app_dir,
+                manifest_error=manifest_error,
+            )
 
-    # Manifest Data parsing
-    raw_desc = manifest.get("description")
-    app_desc: str = str(raw_desc) if raw_desc is not None else ""
-
-    raw_dom = manifest.get("domain")
-    app_dom = str(raw_dom) if raw_dom is not None else f"{canonical_name}.{HOMELAB_DOMAIN}"
-
-    app_net = manifest.get("networks")
-    if not isinstance(app_net, list):
-        app_net = ["proxy-net"]
-
-    app_env = manifest.get("env")
-    if not isinstance(app_env, dict):
-        app_env = {}
-
-    def _as_bool(value: Any, default: bool) -> bool:
-        if isinstance(value, bool):
-            return value
-        return default
-
-    app_vis = _as_bool(manifest.get("visible"), True)
-    app_auth = _as_bool(manifest.get("auth"), True)
-
-    # Source provenance normalization
-    source_config: SourceConfig | None = None
-    raw_source = manifest.get("source")
-    if isinstance(raw_source, dict):
-        source_url = str(raw_source.get("url") or "")
-        allowed_schemes = ("https://", "ssh://", "git@")
-        if source_url:
-            if not any(source_url.startswith(s) for s in allowed_schemes):
-                err = f"Invalid source.url scheme: must start with {', '.join(allowed_schemes)}"
-                manifest_error = f"{manifest_error}; {err}" if manifest_error else err
-            else:
-                source_config = SourceConfig(
-                    type=str(raw_source.get("type") or "git"),
-                    url=source_url,
-                    ref=str(raw_source.get("ref") or "main"),
-                )
-
+    canonical_name = raw_dir_name.replace("homelab-", "")
     return SitesApp(
         name=canonical_name,
         dir_name=raw_dir_name,
-        source=source_config,
-        description=app_desc,
-        domain=app_dom,
+        description="",
+        domain=f"{canonical_name}.{HOMELAB_DOMAIN}",
         dir_path=app_dir,
-        has_compose=has_compose,
-        aliases=aliases,
-        visible=app_vis,
-        auth=app_auth,
-        networks=app_net,
-        env=app_env,
-        homepage=homepage_config,
-        manifest_error=manifest_error,
+        manifest_error=manifest_error or "Missing app.yaml manifest",
     )
 
 
@@ -256,15 +196,36 @@ def get_sites_apps(sites_dir: str | None = None) -> list[SitesApp]:
         if entry.startswith(".") or not os.path.isdir(app_dir):
             continue
         manifest_path = os.path.join(app_dir, "app.yaml")
-        manifest: dict[str, Any] = {}
-        manifest_error: str | None = None
+        manifest_file = Path(manifest_path)
 
-        if os.path.isfile(manifest_path):
-            try:
-                manifest = load_manifest(manifest_path=manifest_path)
-            except ManifestError as err:
-                manifest_error = str(err)
-        apps.append(sites_app_from_manifest(app_dir, manifest, manifest_error))
+        if not manifest_file.is_file():
+            apps.append(
+                sites_app_from_manifest(
+                    app_dir=app_dir,
+                    manifest=None,
+                    manifest_error="Missing app.yaml manifest",
+                )
+            )
+            continue
+
+        try:
+            manifest_obj = parse_manifest(manifest_file)
+            apps.append(sites_app_from_manifest(app_dir=app_dir, manifest=manifest_obj))
+        except (ManifestValidationError, yaml.YAMLError, OSError, ValueError, KeyError) as err:
+            raw_data = None
+            with (
+                contextlib.suppress(Exception),
+                open(manifest_path, "r", encoding="utf-8") as f,
+            ):
+                raw_data = yaml.safe_load(f)
+            app_dict = raw_data if isinstance(raw_data, dict) else {}
+            apps.append(
+                sites_app_from_manifest(
+                    app_dir=app_dir,
+                    manifest=app_dict,
+                    manifest_error=str(err),
+                )
+            )
 
     return apps
 
@@ -728,24 +689,19 @@ def cmd_list(args: list[str]) -> None:
         app_path = Path(app.dir_path)
         docker_status = get_docker_status(app_path)
 
-        manifest_file = app_path / "app.yaml"
-        if manifest_file.is_file():
-            try:
-                manifest_obj = parse_manifest(manifest_file)
-            except (ManifestValidationError, yaml.YAMLError, OSError, ValueError, KeyError):
-                manifest_obj = Manifest(name=app.name, domain=app.domain)
+        if app.manifest_error:
+            dep_str = "⚠️ Manifest Error"
+            prov_str = "⚠️ Invalid Manifest"
         else:
-            manifest_obj = Manifest(name=app.name, domain=app.domain)
-
-        two_axis = inspect_workload_two_axis(
-            app_dir=app_path,
-            manifest=manifest_obj,
-            fetch_upstream=should_fetch,
-            docker_status=docker_status,
-        )
-
-        dep_str = two_axis.checkout.status_label
-        prov_str = two_axis.provenance.status.value
+            manifest_obj = app.manifest_obj or Manifest(name=app.name, domain=app.domain)
+            two_axis = inspect_workload_two_axis(
+                app_dir=app_path,
+                manifest=manifest_obj,
+                fetch_upstream=should_fetch,
+                docker_status=docker_status,
+            )
+            dep_str = two_axis.checkout.status_label
+            prov_str = two_axis.provenance.status.value
 
         if show_ssl:
             cert_info = ssl_data.get(app.domain, check_ssl_cert(app.domain))
@@ -816,15 +772,12 @@ def cmd_info(args: list[str]) -> None:
     print(f"Auth Protected:  {app.auth}")
     print(f"Dashboard:       {'Visible' if app.visible else 'Hidden'}")
 
+    if app.manifest_error:
+        print(f"\n⚠️  Manifest Validation Error:\n  {app.manifest_error}")
+        return
+
     app_path = Path(app.dir_path)
-    manifest_file = app_path / "app.yaml"
-    if manifest_file.is_file():
-        try:
-            manifest_obj = parse_manifest(manifest_file)
-        except (ManifestValidationError, yaml.YAMLError, OSError, ValueError, KeyError):
-            manifest_obj = Manifest(name=app.name, domain=app.domain)
-    else:
-        manifest_obj = Manifest(name=app.name, domain=app.domain)
+    manifest_obj = app.manifest_obj or Manifest(name=app.name, domain=app.domain)
 
     two_axis = inspect_workload_two_axis(
         app_dir=app_path,
@@ -868,6 +821,9 @@ def cmd_resolve(args: list[str]) -> None:
         sys.exit(1)
     app = resolve_app(args[0])
     if not app:
+        sys.exit(1)
+    if isinstance(app, SitesApp) and app.manifest_error:
+        print(f"❌ Error: Workload '{app.name}' has invalid manifest: {app.manifest_error}", file=sys.stderr)
         sys.exit(1)
     print(json.dumps(app.to_dict()))
 

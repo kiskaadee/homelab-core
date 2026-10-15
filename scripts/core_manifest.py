@@ -102,7 +102,7 @@ def validate_transport(url: str) -> tuple[TransportScheme, str]:
         raise ManifestValidationError(f"Insecure HTTP source URL rejected (HTTPS or SSH required): '{clean_url}'")
 
     raise ManifestValidationError(
-        f"Unsupported source URL scheme: '{clean_url}'. "
+        f"Invalid source.url scheme: '{clean_url}'. "
         "Allowed transports are https://, ssh://, or git@<host>:<path>."
     )
 
