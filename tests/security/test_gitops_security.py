@@ -122,13 +122,21 @@ def test_resolve_repository_resolves_valid_manifest(tmp_path: Path, monkeypatch)
         encoding="utf-8"
     )
 
+    registry = tmp_path / "deployments.yaml"
+    registry.write_text(
+        f'schemaVersion: "1.0"\nrepositories:\n  homelab-docs:\n    path: "{app_dir}"\n    aliases:\n      - docs\n      - doc2site\n      - notes\n',
+        encoding="utf-8"
+    )
+
     monkeypatch.setattr(gitops_dispatcher, "SITES_DIR", sites_dir)
+    monkeypatch.setattr(gitops_dispatcher, "DEPLOYMENTS_FILE", registry)
 
     canonical = app_dir.resolve()
     assert gitops_dispatcher.resolve_repository("homelab-docs") == canonical
     assert gitops_dispatcher.resolve_repository("docs") == canonical
     assert gitops_dispatcher.resolve_repository("doc2site") == canonical
     assert gitops_dispatcher.resolve_repository("notes") == canonical
+
 
 
 def test_resolve_repository_rejects_vault(tmp_path: Path, monkeypatch):
@@ -177,6 +185,57 @@ repositories:
     assert mapping["app-alias"] == app_dir.resolve()
     # Out-of-bounds path must be rejected
     assert "escaped-app" not in mapping
+
+
+def test_unregistered_sites_directory_rejected_when_registry_active(tmp_path: Path, monkeypatch):
+    """Ensure unregistered directories in ~/Sites cannot be resolved when deployments.yaml is active."""
+    sites_dir = tmp_path / "Sites"
+    registered_dir = sites_dir / "homelab-docs"
+    unregistered_dir = sites_dir / "rogue-workload"
+    registered_dir.mkdir(parents=True)
+    unregistered_dir.mkdir(parents=True)
+    (registered_dir / "app.yaml").write_text("name: docs\n", encoding="utf-8")
+    (unregistered_dir / "app.yaml").write_text("name: rogue\n", encoding="utf-8")
+
+    registry = tmp_path / "deployments.yaml"
+    registry.write_text(
+        f'schemaVersion: "1.0"\nrepositories:\n  docs:\n    path: "{registered_dir}"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(gitops_dispatcher, "SITES_DIR", sites_dir)
+    monkeypatch.setattr(gitops_dispatcher, "DEPLOYMENTS_FILE", registry)
+
+    assert gitops_dispatcher.resolve_repository("docs") == registered_dir.resolve()
+    # Unregistered workload must be rejected despite having app.yaml in Sites
+    assert gitops_dispatcher.resolve_repository("rogue") is None
+    assert gitops_dispatcher.resolve_repository("rogue-workload") is None
+
+
+def test_missing_or_corrupt_registry_fails_closed(tmp_path: Path, monkeypatch):
+    """Ensure missing or corrupted deployments.yaml fails closed without falling back to directory scanning."""
+    sites_dir = tmp_path / "Sites"
+    app_dir = sites_dir / "valid-app"
+    app_dir.mkdir(parents=True)
+    (app_dir / "app.yaml").write_text("name: valid\n", encoding="utf-8")
+
+    missing_registry = tmp_path / "nonexistent-deployments.yaml"
+    monkeypatch.setattr(gitops_dispatcher, "SITES_DIR", sites_dir)
+    monkeypatch.setattr(gitops_dispatcher, "DEPLOYMENTS_FILE", missing_registry)
+    monkeypatch.setattr(gitops_dispatcher, "CONFIG_DIR", tmp_path / "nonexistent-config")
+
+    # Missing registry must fail closed: empty mapping, no resolution
+    assert gitops_dispatcher.get_trusted_repository_mapping() == {}
+    assert gitops_dispatcher.resolve_repository("valid") is None
+
+    # Corrupt YAML registry must also fail closed
+    corrupt_registry = tmp_path / "corrupt-deployments.yaml"
+    corrupt_registry.write_text("schemaVersion: 1.0\nrepositories: [bad list syntax", encoding="utf-8")
+    monkeypatch.setattr(gitops_dispatcher, "DEPLOYMENTS_FILE", corrupt_registry)
+
+    assert gitops_dispatcher.get_trusted_repository_mapping() == {}
+    assert gitops_dispatcher.resolve_repository("valid") is None
+
 
 
 def test_webhook_verification_valid_signature():
@@ -323,7 +382,13 @@ def test_admission_rejects_branch_mismatch(tmp_path: Path, monkeypatch):
         "name: docs\ndeployment:\n  branch: production\n",
         encoding="utf-8"
     )
+    registry = tmp_path / "deployments.yaml"
+    registry.write_text(
+        f'schemaVersion: "1.0"\nrepositories:\n  docs:\n    path: "{app_dir}"\n',
+        encoding="utf-8",
+    )
     monkeypatch.setattr(gitops_dispatcher, "SITES_DIR", sites_dir)
+    monkeypatch.setattr(gitops_dispatcher, "DEPLOYMENTS_FILE", registry)
 
     payload = {
         "ref": "refs/heads/staging",
@@ -343,7 +408,13 @@ def test_admission_rejects_unsupported_strategy(tmp_path: Path, monkeypatch):
         "name: docs\ndeployment:\n  branch: main\n  strategy: kubernetes\n",
         encoding="utf-8"
     )
+    registry = tmp_path / "deployments.yaml"
+    registry.write_text(
+        f'schemaVersion: "1.0"\nrepositories:\n  docs:\n    path: "{app_dir}"\n',
+        encoding="utf-8",
+    )
     monkeypatch.setattr(gitops_dispatcher, "SITES_DIR", sites_dir)
+    monkeypatch.setattr(gitops_dispatcher, "DEPLOYMENTS_FILE", registry)
 
     payload = {
         "ref": "refs/heads/main",
@@ -363,7 +434,13 @@ def test_admission_rejects_unsupported_actions(tmp_path: Path, monkeypatch):
         "name: docs\ndeployment:\n  branch: main\n  actions:\n    - git_pull\n    - evil_action\n",
         encoding="utf-8"
     )
+    registry = tmp_path / "deployments.yaml"
+    registry.write_text(
+        f'schemaVersion: "1.0"\nrepositories:\n  docs:\n    path: "{app_dir}"\n',
+        encoding="utf-8",
+    )
     monkeypatch.setattr(gitops_dispatcher, "SITES_DIR", sites_dir)
+    monkeypatch.setattr(gitops_dispatcher, "DEPLOYMENTS_FILE", registry)
 
     payload = {
         "ref": "refs/heads/main",
@@ -383,7 +460,13 @@ def test_admission_admits_valid_push(tmp_path: Path, monkeypatch):
         "name: docs\ndeployment:\n  branch: main\n  actions:\n    - git_pull\n    - compose_up\n",
         encoding="utf-8"
     )
+    registry = tmp_path / "deployments.yaml"
+    registry.write_text(
+        f'schemaVersion: "1.0"\nrepositories:\n  docs:\n    path: "{app_dir}"\n',
+        encoding="utf-8",
+    )
     monkeypatch.setattr(gitops_dispatcher, "SITES_DIR", sites_dir)
+    monkeypatch.setattr(gitops_dispatcher, "DEPLOYMENTS_FILE", registry)
 
     payload = {
         "ref": "refs/heads/main",
@@ -391,6 +474,7 @@ def test_admission_admits_valid_push(tmp_path: Path, monkeypatch):
     }
     admitted, target_dir, config, branch, reason = gitops_dispatcher.admit_deployment(payload, event_type="push")
     assert admitted is True
+
     assert "Admitted" in reason
     assert target_dir == app_dir.resolve()
     assert branch == "main"

@@ -156,88 +156,52 @@ def get_trusted_repository_mapping() -> dict[str, Path]:
     """
     Build authoritative mapping of logical repository identities to local paths.
     Webhook payloads can only select repositories defined in this mapping.
-    Prioritizes Core Authoritative Registry (deployments.yaml) over dynamic discovery.
+    Core Authoritative Registry (deployments.yaml) is the sole admission authority.
+    Fails closed if the registry is missing, unreadable, or malformed.
     """
     mapping: dict[str, Path] = {}
 
-    # 1. Authoritative Core Repository Registry (deployments.yaml)
     registry_file = DEPLOYMENTS_FILE if DEPLOYMENTS_FILE.is_file() else (CONFIG_DIR / "deployments.yaml")
-    if registry_file.is_file():
-        try:
-            content = registry_file.read_text(encoding="utf-8")
-            registry = (yaml.safe_load(content) if yaml else parse_yaml_simple(content)) or {}
-            repo_entries = registry.get("repositories", registry) if isinstance(registry, dict) else {}
-            if isinstance(repo_entries, dict):
-                for reg_name, entry in repo_entries.items():
-                    if not isinstance(entry, dict):
-                        continue
-                    raw_path = entry.get("path")
-                    if not raw_path:
-                        continue
-                    p = Path(raw_path).expanduser().resolve()
-                    # Enforce strict containment strictly inside SITES_DIR
-                    if SITES_DIR.is_dir() and p.is_relative_to(SITES_DIR.resolve()):
-                        mapping[reg_name] = p
-                        raw_aliases = entry.get("aliases", [])
-                        if isinstance(raw_aliases, str):
-                            raw_aliases = [raw_aliases]
-                        if isinstance(raw_aliases, list):
-                            for alias in raw_aliases:
-                                if isinstance(alias, str) and alias.strip():
-                                    mapping[alias.strip()] = p
-                    else:
-                        logger.warning(f"Rejecting out-of-bounds path in deployments.yaml for '{reg_name}': {p}")
-        except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
-            logger.warning(f"Failed to parse authoritative registry {registry_file}: {e}")
+    if not registry_file.is_file():
+        logger.error(f"Authoritative registry {registry_file} not found. Failing closed with zero admitted repositories.")
+        return mapping
 
-    # 2. Dynamic Discovery in SITES_DIR (for workloads not explicitly registered)
-    if SITES_DIR.is_dir():
-        sites_canonical = SITES_DIR.resolve()
-        for entry in SITES_DIR.iterdir():
-            if not entry.is_dir():
-                continue
+    yaml_errors = (yaml.YAMLError,) if yaml is not None else ()
+    try:
+        content = registry_file.read_text(encoding="utf-8")
+        registry = (yaml.safe_load(content) if yaml else parse_yaml_simple(content)) or {}
+        repo_entries = registry.get("repositories", registry) if isinstance(registry, dict) else {}
+        if isinstance(repo_entries, dict):
+            for reg_name, entry in repo_entries.items():
+                if not isinstance(entry, dict):
+                    continue
+                raw_path = entry.get("path")
+                if not raw_path:
+                    continue
+                p = Path(raw_path).expanduser().resolve()
+                # Enforce strict containment strictly inside SITES_DIR
+                if SITES_DIR.is_dir() and p.is_relative_to(SITES_DIR.resolve()):
+                    mapping[reg_name] = p
+                    raw_aliases = entry.get("aliases", [])
+                    if isinstance(raw_aliases, str):
+                        raw_aliases = [raw_aliases]
+                    if isinstance(raw_aliases, list):
+                        for alias in raw_aliases:
+                            if isinstance(alias, str) and alias.strip():
+                                mapping[alias.strip()] = p
+                else:
+                    logger.warning(f"Rejecting out-of-bounds path in deployments.yaml for '{reg_name}': {p}")
+        else:
+            logger.error(f"Malformed repositories block in {registry_file}: expected dictionary mapping.")
+            return {}
+    except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError, TypeError, *yaml_errors) as e:
+        logger.critical(f"Failed to parse authoritative registry {registry_file}: {e}. Failing closed.")
+        return {}
 
-            # Defense-in-depth: resolve symlinks and ensure target is strictly inside SITES_DIR
-            resolved_entry = entry.resolve()
-            if not resolved_entry.is_relative_to(sites_canonical):
-                logger.warning(f"Rejecting repository symlink escape: {entry} -> {resolved_entry}")
-                continue
 
-            manifest_file = resolved_entry / "app.yaml"
-            if not manifest_file.is_file():
-                continue
-
-            # Register entry directory name if not already mapped
-            dir_name = entry.name
-            if dir_name not in mapping:
-                mapping[dir_name] = resolved_entry
-
-            # Parse app.yaml for canonical name and aliases
-            manifest = {}
-            try:
-                manifest_text = manifest_file.read_text(encoding="utf-8")
-                manifest = (yaml.safe_load(manifest_text) if yaml else parse_yaml_simple(manifest_text)) or {}
-            except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
-                logger.warning(f"Failed to parse {manifest_file}: {e}")
-
-            canonical_name = manifest.get("name")
-            if canonical_name and isinstance(canonical_name, str):
-                canonical_name = canonical_name.strip()
-                if canonical_name not in mapping:
-                    mapping[canonical_name] = resolved_entry
-                alias_with_prefix = f"homelab-{canonical_name}" if not canonical_name.startswith("homelab-") else canonical_name.replace("homelab-", "", 1)
-                if alias_with_prefix not in mapping:
-                    mapping[alias_with_prefix] = resolved_entry
-
-            aliases = manifest.get("aliases", [])
-            if isinstance(aliases, str):
-                aliases = [aliases]
-            if isinstance(aliases, list):
-                for alias in aliases:
-                    if isinstance(alias, str) and alias.strip() and alias.strip() not in mapping:
-                        mapping[alias.strip()] = resolved_entry
 
     return mapping
+
 
 
 def resolve_repository(repo_name: str) -> Path | None:
