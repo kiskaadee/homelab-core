@@ -370,10 +370,40 @@ def validate_compose_security(
             return False, f"Service '{svc_name}' specifies prohibited host device mount: {devices}."
 
         sec_opts = svc.get("security_opt", [])
+        if isinstance(sec_opts, str):
+            sec_opts = [sec_opts]
         if isinstance(sec_opts, list):
             for opt in sec_opts:
                 if any(bad in str(opt).lower() for bad in ("unconfined", "disable")):
                     return False, f"Service '{svc_name}' specifies prohibited security_opt: {opt}."
+
+        raw_env_files = svc.get("env_file")
+        if raw_env_files:
+            env_file_list: list[str] = []
+            if isinstance(raw_env_files, str):
+                env_file_list = [raw_env_files]
+            elif isinstance(raw_env_files, list):
+                for item in raw_env_files:
+                    if isinstance(item, str):
+                        env_file_list.append(item)
+                    elif isinstance(item, dict) and "path" in item:
+                        env_file_list.append(str(item["path"]))
+            elif isinstance(raw_env_files, dict) and "path" in raw_env_files:
+                env_file_list = [str(raw_env_files["path"])]
+
+            for env_path in env_file_list:
+                clean_env = env_path.strip()
+                if not clean_env:
+                    continue
+                if clean_env.startswith("~"):
+                    resolved_env = Path(clean_env).expanduser().resolve()
+                elif Path(clean_env).is_absolute():
+                    resolved_env = Path(clean_env).resolve()
+                else:
+                    resolved_env = (allowed_root / clean_env).resolve()
+
+                if not (allowed_root.is_dir() and resolved_env.is_relative_to(canonical_allowed_root)):
+                    return False, f"Service '{svc_name}' specifies prohibited env_file escaping workload root: '{clean_env}'."
 
         for ns_key in ("network_mode", "pid", "ipc", "uts", "userns_mode"):
             val = str(svc.get(ns_key, "")).strip().lower()
@@ -402,6 +432,10 @@ def validate_compose_security(
                 # Declared top-level named volume without path separators
                 if host_path in top_volumes and not (host_path.startswith((".", "/", "~")) or "/" in host_path or "\\" in host_path):
                     continue
+
+                # Undeclared named volumes or bare identifiers not starting with ., /, ~ or containing / are prohibited
+                if not (host_path.startswith((".", "/", "~")) or "/" in host_path or "\\" in host_path):
+                    return False, f"Service '{svc_name}' specifies undeclared named volume or ambiguous path: '{host_path}'."
 
                 # Host bind mount evaluation
                 if host_path.startswith("~"):
@@ -465,6 +499,14 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
         logger.info(f"Skipping deployment: pushed branch '{branch}' != target branch '{expected_branch}'")
         return True
 
+    canonical_app_name = target_dir.name.removeprefix("homelab-")
+    manifest_file = target_dir / "app.yaml"
+    if manifest_file.is_file():
+        with contextlib.suppress(Exception):
+            pre_manifest = (yaml.safe_load(manifest_file.read_text(encoding="utf-8")) if yaml else parse_yaml_simple(manifest_file.read_text(encoding="utf-8"))) or {}
+            if isinstance(pre_manifest, dict) and pre_manifest.get("name"):
+                canonical_app_name = str(pre_manifest["name"]).strip()
+
     logger.info(f"🚀 Deploying '{target_dir.name}' at {target_dir} (branch: {expected_branch})...")
     actions = deployment_config.get("actions", ["git_pull"])
 
@@ -495,6 +537,9 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
                         logger.error(f"❌ Post-pull manifest validation failed for '{target_dir.name}': {err_msg}")
                         return False
 
+                    if isinstance(fresh_manifest, dict) and fresh_manifest.get("name"):
+                        canonical_app_name = str(fresh_manifest["name"]).strip()
+
                     fresh_config = fresh_manifest.get("deployment")
                     if isinstance(fresh_config, dict):
                         fresh_branch = fresh_config.get("branch", "main")
@@ -514,7 +559,7 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
                 if not compose_file.is_file():
                     compose_file = target_dir / "docker-compose.yaml"
                 if compose_file.is_file():
-                    valid_sec, sec_err = validate_compose_security(compose_file, target_dir)
+                    valid_sec, sec_err = validate_compose_security(compose_file, target_dir, app_name=canonical_app_name)
                     if not valid_sec:
                         logger.error(f"❌ Compose security validation failed for '{target_dir.name}': {sec_err}")
                         return False
@@ -528,7 +573,7 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
                 if not compose_file.is_file():
                     compose_file = target_dir / "docker-compose.yaml"
                 if compose_file.is_file():
-                    valid_sec, sec_err = validate_compose_security(compose_file, target_dir)
+                    valid_sec, sec_err = validate_compose_security(compose_file, target_dir, app_name=canonical_app_name)
                     if not valid_sec:
                         logger.error(f"❌ Compose security validation failed for '{target_dir.name}': {sec_err}")
                         return False
@@ -546,7 +591,7 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
                 if not compose_file.is_file():
                     compose_file = target_dir / "docker-compose.yaml"
                 if compose_file.is_file():
-                    valid_sec, sec_err = validate_compose_security(compose_file, target_dir)
+                    valid_sec, sec_err = validate_compose_security(compose_file, target_dir, app_name=canonical_app_name)
                     if not valid_sec:
                         logger.error(f"❌ Compose security validation failed for '{target_dir.name}': {sec_err}")
                         return False

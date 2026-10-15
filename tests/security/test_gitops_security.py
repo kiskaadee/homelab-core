@@ -896,6 +896,79 @@ def test_validate_compose_security_rejects_symlink_escape(tmp_path: Path):
     assert err is not None and "symlink" in err.lower()
 
 
+def test_validate_compose_security_rejects_escaping_env_file(tmp_path: Path):
+    """Ensure services cannot use env_file to read secrets outside the workload root."""
+    app_dir = tmp_path / "my-app"
+    app_dir.mkdir(parents=True)
+    (app_dir / "valid.env").write_text("A=1\n", encoding="utf-8")
+
+    # 1. Escaping absolute path
+    compose_file = app_dir / "docker-compose.yml"
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine
+    env_file: /run/secrets/homeserver.env
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, app_dir, app_name="my-app")
+    assert valid is False
+    assert err is not None and "env_file" in err.lower()
+
+    # 2. Escaping relative path in list
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine
+    env_file:
+      - valid.env
+      - ../../Core/.env
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, app_dir, app_name="my-app")
+    assert valid is False
+    assert err is not None and "env_file" in err.lower()
+
+    # 3. Valid local env_file
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine
+    env_file: valid.env
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, app_dir, app_name="my-app")
+    assert valid is True
+    assert err is None
+
+
+def test_validate_compose_security_rejects_undeclared_named_volumes(tmp_path: Path):
+    """Ensure ambiguous volume paths not declared in top-level volumes are rejected."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine
+    volumes:
+      - rogue_named_volume:/data
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path, app_name="my-app")
+    assert valid is False
+    assert err is not None and "undeclared" in err.lower()
+
+
+def test_validate_compose_security_handles_string_security_opt(tmp_path: Path):
+    """Ensure security_opt specified as string instead of list is strictly checked."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text("""
+services:
+  app:
+    image: alpine
+    security_opt: "apparmor:unconfined"
+""", encoding="utf-8")
+    valid, err = gitops_dispatcher.validate_compose_security(compose_file, tmp_path, app_name="my-app")
+    assert valid is False
+    assert err is not None and "security_opt" in err.lower()
+
+
+
 
 
 
