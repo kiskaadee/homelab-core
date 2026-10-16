@@ -8,14 +8,23 @@ echo "🔍 Running code linters (ruff)..."
 if command -v ruff &>/dev/null; then
     ruff check .
 else
-    nix-shell -p ruff --run "ruff check ."
+    nix develop --command ruff check .
+fi
+
+echo "🔎 Running static type analysis (pyright)..."
+if command -v pyright &>/dev/null; then
+    pyright
+else
+    nix develop --command pyright
 fi
 
 echo "🧪 Running architecture & security test suite (pytest)..."
-if command -v pytest &>/dev/null; then
+if [ -x ".venv/bin/pytest" ]; then
+    .venv/bin/pytest tests/
+elif command -v pytest &>/dev/null; then
     pytest tests/
 else
-    nix-shell -p python3Packages.pytest python3Packages.pyyaml python3Packages.pydantic --run "pytest tests/"
+    nix develop --command pytest tests/
 fi
 
 echo "❄️  Verifying NixOS flake & sandbox checks..."

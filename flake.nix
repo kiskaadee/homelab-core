@@ -1,5 +1,5 @@
 {
-  description = "Homelab Core — Turnkey Declarative NixOS Appliance for roadtotech.me";
+  description = "Homelab Core — Turnkey Declarative NixOS Appliance";
 
   inputs = {
     nixpkgs.url = "https://channels.nixos.org/nixos-unstable/nixexprs.tar.zst";
@@ -14,6 +14,12 @@
   let
     system = "x86_64-linux";
     pkgs = nixpkgs.legacyPackages.${system};
+    pythonEnv = pkgs.python3.withPackages (ps: with ps; [
+      pyyaml
+      types-pyyaml
+      pytest
+      pydantic
+    ]);
   in
   {
     nixosConfigurations.server = nixpkgs.lib.nixosSystem {
@@ -27,17 +33,16 @@
 
     devShells.${system}.default = pkgs.mkShell {
       buildInputs = with pkgs; [
-        (python3.withPackages (ps: with ps; [
-          pyyaml
-          types-pyyaml
-          pytest
-          pydantic
-        ]))
+        pythonEnv
         pyright
         ruff
       ];
       shellHook = ''
         git config core.hooksPath .githooks 2>/dev/null || true
+        if [ -d .venv ] && [ ! -L .venv ]; then
+          rm -rf .venv
+        fi
+        ln -sfn ${pythonEnv} .venv
       '';
     };
 
@@ -45,10 +50,7 @@
       test-suite = pkgs.runCommand "core-tests" {
         nativeBuildInputs = with pkgs; [
           git
-          python3
-          python3Packages.pytest
-          python3Packages.pyyaml
-          python3Packages.pydantic
+          pythonEnv
           ruff
         ];
       } ''

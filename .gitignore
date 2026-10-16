@@ -5,6 +5,7 @@ secrets.txt
 backup.zip
 .envrc
 .direnv
+.venv
 
 # SSL / ACME Certificates & Keys
 config/letsencrypt/*
