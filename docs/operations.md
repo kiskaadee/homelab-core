@@ -51,7 +51,7 @@ docker system prune -a --volumes --filter "until=168h"
 Homelab Core runs several platform services managed by systemd:
 
 ### `homeserver-core.service` (Core Compose Stack)
-Manages the lifecycle of Traefik, Authelia, LLDAP, Stalwart, SnappyMail, Homepage, Dozzle, Watchtower, and Diun.
+Manages the lifecycle of Traefik, Authelia, LLDAP, Stalwart, Homepage, Dozzle, Watchtower, and Diun.
 
 ```bash
 # Check service status

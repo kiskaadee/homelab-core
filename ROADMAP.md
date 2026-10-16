@@ -100,12 +100,12 @@ It describes the implementation trajectory and phased engineering milestones for
 **Status**: 🎯 **Current / Up Next**
 * **Objective**: Evolve `appctl` from a collection of local shell scripts into the authoritative platform daemon while enforcing authorization gates from day one.
 * **Key Deliverables**:
-  1. *Daemon Service (`homelab-appctl.service`)*: Systemd daemon exposing one logical API across dual transports: Unix domain socket (`/run/homelab/appctl.sock`) on host and HTTP listener for network clients.
-  2. *Mandatory Authorization Gate*: Establish the authentication/authorization middleware interface before exposing mutating routes; reject unauthenticated mutations across both Unix socket and HTTP transports.
-  3. *Command-Oriented Operational Router*: Strongly-typed endpoints (`POST /operations/deploy`, `POST /operations/restart`, `POST /operations/pull`, `GET /workloads`, `GET /workloads/{id}/status`, `POST /operations/sync`) invoking `core_manifest.py` and `appctl_engine.py` via internal interfaces.
+  1. *Daemon Service (`homelab-appctl.service`)*: Systemd daemon running as dedicated user `homelab-appctl` (`Group = "homelab-operators"`), exposing one logical HTTP/1.1 API across dual transports: Unix domain socket (`/run/homelab/appctl.sock`) on host and loopback HTTP listener (`127.0.0.1:9001`).
+  2. *Mandatory Authorization Gate*: Enforce SOPS-projected SHA-256 Bearer tokens (`/run/secrets/appctl/tokens.json`) and 3-role RBAC (`homelab-admin`, `homelab-operator`, `homelab-viewer`) for all mutations, sensitive reads (`workload.config`, `workload.logs`), and HTTP calls; restrict `SO_PEERCRED` on UDS to non-sensitive `homelab-viewer` inspection.
+  3. *Command-Oriented Operational Router*: Single canonical command endpoint (`POST /v1/operations` + `GET /v1/health`) invoking `core_manifest.py`, `appctl_engine.py`, `validate_compose_security()`, and pure-Python `.env` assembly with per-target `flock` serialization and revision-consistent `workload.update` execution (unifying CLI and `gitops_dispatcher.py` worker execution).
   4. *Thin-Client CLI*: Re-implement `scripts/appctl` as a lightweight dispatch client communicating with the local daemon socket.
-  5. *Append-Only Audit Log*: Record every mutating command to `~/.local/state/homelab/appctl/audit.jsonl` with restricted `0600` permissions. Telemetry captures `principal`, `action`, `target`, `transport`, `origin`, `client`, `timestamp`, and `result`.
-* **Exit Criteria**: Hermetic API test suite passing; unauthenticated mutation attempts rejected across both transports; audit log capturing multi-dimensional telemetry.
+  5. *Append-Only Audit Log*: Record every mutating command, sensitive read, and denied request to `/var/log/homelab/appctl/audit.jsonl` with restricted `0600` permissions (`homelab-appctl`) and a fail-closed pre-execution disk guard. Telemetry captures `principal`, `action`, `target`, `transport`, `origin`, `client`, `timestamp`, and `result`.
+* **Exit Criteria**: Hermetic API test suite passing; unauthenticated and unauthorized mutation attempts rejected across both transports; audit log capturing multi-dimensional telemetry under `homelab-appctl` isolation.
 
 ---
 
