@@ -13,8 +13,8 @@ This document outlines the security controls, container isolation rules, and ope
 * Traefik and Dozzle query Docker metrics and metadata via `tcp://socket-proxy:2375` rather than direct socket mounts.
 
 ### B. Identity & Access Management (`lldap` & `authelia`)
-* **Directory Service**: User accounts and group memberships are stored in LLDAP (`users.roadtotech.me`).
-* **ForwardAuth**: Traefik intercepts incoming HTTP/HTTPS requests and validates sessions with Authelia (`auth.roadtotech.me`) before routing to protected backends.
+* **Directory Service**: User accounts and group memberships are stored in LLDAP (`users.${HOMELAB_DOMAIN}`).
+* **ForwardAuth**: Traefik intercepts incoming HTTP/HTTPS requests and validates sessions with Authelia (`auth.${HOMELAB_DOMAIN}`) before routing to protected backends.
 * **MFA Support**: Supports TOTP and FIDO2 authentication.
 
 ### C. Network Segmentation
@@ -51,7 +51,7 @@ This document outlines the security controls, container isolation rules, and ope
 ## 3. Verification Checklist
 
 - [x] Secrets encrypted in `nixos/secrets.yaml` via Age / SOPS.
-- [x] User identities managed in LLDAP (`users.roadtotech.me`).
+- [x] User identities managed in LLDAP (`users.${HOMELAB_DOMAIN}`).
 - [x] `socket-proxy` configured with `POST=0`, `DELETE=0`, `BUILD=0`, `EXEC=0`.
 - [x] Webhook HMAC signature verification active on port 9000.
 - [x] Invariant test runner (`./scripts/test`) passing on changes.

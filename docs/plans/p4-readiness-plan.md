@@ -189,7 +189,7 @@ The platform defines three hierarchical authorization tiers:
 
 | Role | Permitted Operations | Typical Principals |
 | :--- | :--- | :--- |
-| `homelab-admin` | All operations (including Core platform mutation, daemon reload, secret regeneration). | Break-glass admin token, human interactive operator (`kiskaadee`). |
+| `homelab-admin` | All operations (including Core platform mutation, daemon reload, secret regeneration). | Break-glass admin token, human interactive operator (`operator`). |
 | `homelab-operator` | Workload mutations (`deploy`, `stop`, `restart`, `update`, `pull`, `sync_homepage`). Cannot mutate Core platform infrastructure. | GitOps webhook runner token, automation scripts. |
 | `homelab-viewer` | Read-only operations (`list`, `get`, `resolve`, `config`, `logs`, `ssl`, `health`). Zero mutations permitted. | Homepage dashboard status monitor, read-only diagnostic CLI. |
 
@@ -244,17 +244,17 @@ Following the pattern established in Milestone P2 for `homelab-gitops.service`, 
 - `ProtectSystem = "strict"`: Host filesystem is read-only.
 - `ProtectHome = "read-only"`: User home is read-only by default.
 - `ReadWritePaths`: Explicitly allowlisted writable roots:
-  - `/home/kiskaadee/Sites` (workload definitions and Git checkouts)
-  - `/home/kiskaadee/var/lib/homelab` (workload persistent state roots)
-  - `/home/kiskaadee/Core/config/homepage` (Homepage services.yaml destination)
-  - `/var/log/homelab/appctl` or `/home/kiskaadee/.local/state/homelab/appctl` (audit log directory)
+  - `/home/<operator>/Sites` (workload definitions and Git checkouts)
+  - `/home/<operator>/var/lib/homelab` (workload persistent state roots)
+  - `/home/<operator>/Core/config/homepage` (Homepage services.yaml destination)
+  - `/var/log/homelab/appctl` or `/home/<operator>/.local/state/homelab/appctl` (audit log directory)
   - `/run/homelab` (socket runtime directory)
 - `PrivateTmp = true`: Isolated temporary directories.
 - `NoNewPrivileges = true`: Disallows privilege escalation.
 
 ### C. Platform Genericism & Domain Decoupling
 Per Invariant #8 in `AGENTS.md`, the control plane and all platform components must remain strictly instance-agnostic:
-- **No Hardcoded Domains**: Personal domain names (e.g. `roadtotech.me`) must never appear hardcoded in Python modules, NixOS definitions, or default configurations.
+- **No Hardcoded Domains**: Personal domain names must never appear hardcoded in Python modules, NixOS definitions, or default configurations.
 - **Canonical Precedence & Dynamic Resolution**: All domain resolutions follow strict, fail-closed precedence:
   1. `HOMELAB_DOMAIN` (Primary platform apex domain)
   2. `DOMAIN_SUFFIX` (Secondary routing suffix fallback)
@@ -279,7 +279,7 @@ Every operation lifecycle event is emitted as a structured JSON object to `audit
   "timestamp": "2026-10-13T18:32:05.112Z",
   "phase": "COMPLETED",
   "principal": {
-    "identity": "kiskaadee",
+    "identity": "operator",
     "role": "homelab-admin",
     "token_id": "tok_99fa1b",
     "auth_method": "bearer_token"

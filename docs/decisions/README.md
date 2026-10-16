@@ -1,8 +1,8 @@
 # 🏛️ Homelab Core & Appctl Architecture Decision Index
 
-This document serves as the repository-facing index for Architectural Decision Records (ADRs) governing **Homelab Core** and the **`appctl` Operational Control Plane**.
+This document serves as the authoritative repository index for Architectural Decision Records (ADRs) governing **Homelab Core** and the **`appctl` Operational Control Plane**.
 
-In accordance with platform governance, authoritative ADRs are maintained in the central knowledge vault (`03-records/decisions/`) using the MADR 4.0 specification. This index provides navigation, context, and one-line summaries without duplicating architectural specifications or creating competing sources of truth.
+Repository-level architectural decisions are recorded in `docs/decisions/` using the MADR 4.0 specification. Foundational platform ADRs (0001 and 0002) are summarized inline below alongside full MADR records (0003+).
 
 ---
 
@@ -10,9 +10,9 @@ In accordance with platform governance, authoritative ADRs are maintained in the
 
 | Decision Record | Status | Date | Scope & One-Line Purpose |
 | :--- | :--- | :--- | :--- |
-| [**Centralized Runtime Validation & Serialization via Pydantic v2**](0003-pydantic-v2-runtime-validation.md) | `accepted` | 2026-10-15 | Adopts Pydantic v2 as the single runtime schema and validation authority across workload manifests and daemon API to enforce fail-closed type safety, strict schema-based boundaries, and secret-safe serialization. |
-| [**Homelab Operational Control Plane & Deployment Model Architecture**](#homelab-operational-control-plane--deployment-model-architecture) | `accepted` | 2026-10-07 | Establishes `appctl` as the central operational control plane daemon, one logical API across dual transports (Unix socket and HTTP), explicit token authentication on host, Git as authoritative deployment state, the 5-stage model lifecycle, AI proposal boundaries, and append-only audit telemetry. |
-| [**Homelab 3-Tier Architecture & Deployment Provenance Model**](#homelab-3-tier-architecture--deployment-provenance-model) | `accepted` | 2026-09-28 | Establishes 3-tier separation (Software, OCI Artifact, Sites Deployment, Core Platform), two workload classes (Source-Backed vs. Image-Only), isolated state root (`~/var/lib/homelab/<app>/`), and two operational inspection axes. |
+| [**ADR-0003: Centralized Runtime Validation & Serialization via Pydantic v2**](0003-pydantic-v2-runtime-validation.md) | `accepted` | 2026-10-15 | Adopts Pydantic v2 as the single runtime schema and validation authority across workload manifests and daemon API to enforce fail-closed type safety, strict schema-based boundaries, and secret-safe serialization. |
+| [**ADR-0002: Homelab Operational Control Plane & Deployment Model Architecture**](#homelab-operational-control-plane--deployment-model-architecture) | `accepted` | 2026-10-07 | Establishes `appctl` as the central operational control plane daemon, one logical API across dual transports (Unix socket and HTTP), explicit token authentication on host, Git as authoritative deployment state, the 5-stage model lifecycle, AI proposal boundaries, and append-only audit telemetry. |
+| [**ADR-0001: Homelab 3-Tier Architecture & Deployment Provenance Model**](#homelab-3-tier-architecture--deployment-provenance-model) | `accepted` | 2026-09-28 | Establishes 3-tier separation (Software, OCI Artifact, Sites Deployment, Core Platform), two workload classes (Source-Backed vs. Image-Only), isolated state root (`~/var/lib/homelab/<app>/`), and two operational inspection axes. |
 
 
 ---
@@ -32,7 +32,7 @@ In accordance with platform governance, authoritative ADRs are maintained in the
 
 ### Homelab Operational Control Plane & Deployment Model Architecture
 
-* **Canonical Document**: `03-records/decisions/homelab-appctl-control-plane-architecture.md`
+* **Decision ID**: `ADR-0002`
 * **Status**: `accepted` (Active)
 * **Governing Implementation Plan**: [ROADMAP.md](../../ROADMAP.md) (Roadmap v5)
 * **Core Commitments**:
@@ -48,7 +48,7 @@ In accordance with platform governance, authoritative ADRs are maintained in the
 ---
 
 ### Homelab 3-Tier Architecture & Deployment Provenance Model
-* **Canonical Document**: `03-records/decisions/homelab-3tier-architecture-and-provenance.md`
+* **Decision ID**: `ADR-0001`
 * **Status**: `accepted` (Active)
 * **Governing Implementation Plan**: [ROADMAP.md](../../ROADMAP.md) (Roadmap v5)
 * **Core Commitments**:

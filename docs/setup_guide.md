@@ -12,10 +12,10 @@ When provisioning bare-metal hardware or a virtual machine from a NixOS Minimal 
 1. Partition and format disks according to `nixos/hardware-configuration.nix` (e.g. boot EFI partition and root filesystem).
 2. Mount partitions under `/mnt`.
 3. **Restore Host Secrets Key**: Copy the host SSH private key to `/mnt/etc/ssh/ssh_host_ed25519_key` (mode `0600`). This is required because `sops-nix` decrypts `nixos/secrets.yaml` during system activation.
-4. Clone the Core repository to `/mnt/home/kiskaadee/Core`.
+4. Clone the Core repository to `/mnt/home/<operator>/Core`.
 5. Run the NixOS installer:
    ```bash
-   nixos-install --flake /mnt/home/kiskaadee/Core#server
+   nixos-install --flake /mnt/home/<operator>/Core#server
    reboot
    ```
 
@@ -69,7 +69,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
    ```
 
 ### Step 6: Initialize LLDAP Directory
-1. Navigate to `https://users.roadtotech.me`.
+1. Navigate to `https://users.${HOMELAB_DOMAIN}` (e.g., `https://users.example.com`).
 2. Authenticate using `admin` and the password configured in `nixos/secrets.yaml` (`lldap/admin_password`).
 3. Create standard user accounts and assign them to required groups.
 
@@ -89,10 +89,11 @@ git init
 ### Step 2: Create `app.yaml` Manifest
 Create `~/Sites/homelab-myapp/app.yaml`:
 ```yaml
+schema_version: "1.0"
 name: "myapp"
 aliases:
   - "app"
-domain: "myapp.roadtotech.me"
+domain: "myapp.example.com"
 description: "My New Application Service"
 visible: true
 auth: false
@@ -104,6 +105,7 @@ env:
 
 deployment:
   branch: "main"
+  strategy: "compose"
   actions:
     - git_pull
     - compose_up

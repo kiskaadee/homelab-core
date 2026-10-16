@@ -163,23 +163,32 @@ exit 0
 
 
 def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests():
-
-    """Ensure personal domains and operator usernames are absent from scripts and test files."""
+    """Ensure personal domains and operator usernames are absent from scripts, tests, and documentation."""
     forbidden = ["roadtotech.me", "kiskaadee"]
-    root_dirs = [CORE_ROOT / "scripts", CORE_ROOT / "tests"]
+    root_dirs = [CORE_ROOT / "scripts", CORE_ROOT / "tests", CORE_ROOT / "docs"]
+    root_files = [
+        CORE_ROOT / "README.md",
+        CORE_ROOT / "ROADMAP.md",
+        CORE_ROOT / "AGENTS.md",
+        CORE_ROOT / "SECURITY.md",
+        CORE_ROOT / "flake.nix",
+    ]
     violations = []
 
+    candidate_files = list(root_files)
     for root_dir in root_dirs:
-        for file_path in root_dir.rglob("*"):
-            if (
-                file_path.is_file()
-                and file_path.suffix in (".py", ".sh", ".bash", ".yml", ".yaml", "")
-                and file_path.name != "test_security_invariants.py"
-            ):
-                content = file_path.read_text(encoding="utf-8", errors="ignore")
-                for term in forbidden:
-                    if term in content:
-                        violations.append(f"{file_path.relative_to(CORE_ROOT)}: contains prohibited literal '{term}'")
+        candidate_files.extend(root_dir.rglob("*"))
+
+    for file_path in candidate_files:
+        if (
+            file_path.is_file()
+            and file_path.suffix in (".py", ".sh", ".bash", ".yml", ".yaml", ".md", ".nix", "")
+            and file_path.name != "test_security_invariants.py"
+        ):
+            content = file_path.read_text(encoding="utf-8", errors="ignore")
+            for term in forbidden:
+                if term in content:
+                    violations.append(f"{file_path.relative_to(CORE_ROOT)}: contains prohibited literal '{term}'")
 
     assert not violations, "Platform genericism violations detected:\n" + "\n".join(violations)
 

@@ -158,7 +158,7 @@ appctl config docs
 User accounts and group memberships are managed dynamically in **LLDAP** rather than static configuration files.
 
 ### Accessing the Directory
-1. Open `https://users.roadtotech.me` in your browser.
+1. Open `https://users.${HOMELAB_DOMAIN}` (e.g., `https://users.example.com`) in your browser.
 2. Authenticate using your admin credentials (`admin` / password configured in `nixos/secrets.yaml`).
 3. From the LLDAP UI, you can:
    - Create and delete user accounts.
@@ -167,7 +167,7 @@ User accounts and group memberships are managed dynamically in **LLDAP** rather 
    - Assign users to groups (e.g. `admin`, `users`, `media`).
 
 ### Authelia Session & Authentication
-* **URL**: `https://auth.roadtotech.me`
+* **URL**: `https://auth.${HOMELAB_DOMAIN}` (e.g., `https://auth.example.com`)
 * **Session Lifetime**: 7 days maximum session, 3 days inactivity timeout.
 * **ForwardAuth Guard**: Applications requiring authentication attach the `authelia-auth@docker` middleware.
 
@@ -193,12 +193,12 @@ User accounts and group memberships are managed dynamically in **LLDAP** rather 
   ```
 
 ### B. Dynamic DNS (WAN IP) Drift
-* **Symptom**: External domain `roadtotech.me` does not resolve to the current ISP WAN address.
+* **Symptom**: External domain (`${HOMELAB_DOMAIN}`) does not resolve to the current ISP WAN address.
 * **Diagnosis**:
   ```bash
   # Check current public IP vs resolved DNS IP
   curl -s https://api.ipify.org
-  dig +short roadtotech.me @1.1.1.1
+  dig +short example.com @1.1.1.1
 
   # Check dynu-monitor logs
   systemctl status dynu-monitor
@@ -263,7 +263,7 @@ To back up the homelab, create secure snapshots of the following state directori
 | **User Directory** | `~/Core/config/lldap/data/` | LLDAP SQLite database (`users.db`) |
 | **Auth Database** | `~/Core/config/authelia/db.sqlite3` | Authelia session database |
 | **Mail Storage** | `~/Core/config/stalwart/` | Stalwart database, mailboxes, and DKIM keys |
-| **Webmail State** | `~/Core/config/snappymail/data/` | SnappyMail configuration and sessions |
+| **Workload State** | `~/var/lib/homelab/<app>/` | Per-workload persistent runtime state (e.g., `snappymail`) |
 | **Dashboard State** | `~/Core/config/homepage/` | Homepage configuration and custom icons |
 
 ### Host Recovery Requirements
@@ -272,10 +272,10 @@ To bring up a replacement host from version control:
 2. **Restore the host SSH private key** to `/etc/ssh/ssh_host_ed25519_key` (mode `0600`) before running `nixos-install`, as `sops-nix` requires this key during system evaluation and activation.
 3. Install NixOS targeting the server flake:
    ```bash
-   nixos-install --flake /mnt/home/kiskaadee/Core#server
+   nixos-install --flake /mnt/home/<operator>/Core#server
    reboot
    ```
-4. Restore persistent data directories (`config/` backups) and start the Core stack:
+4. Restore persistent data directories (`config/` and `~/var/lib/homelab/` backups) and start the Core stack:
    ```bash
    sudo systemctl start homeserver-core
    ```
