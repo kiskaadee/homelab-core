@@ -19,6 +19,7 @@ from core_manifest import Manifest, RefType, SourceConfig
 
 class ProvenanceStatus(str, Enum):
     """Evaluation result of local state vs. upstream software provenance."""
+
     SYNCED = "✓ Synced"
     UPDATE_AVAILABLE = "↓ Update Available"
     IMAGE_ONLY = "— Image-Only (Class B)"
@@ -32,6 +33,7 @@ class ProvenanceStatus(str, Enum):
 @dataclass
 class CheckoutStatus:
     """Axis 1: Local deployment checkout state."""
+
     is_git: bool
     is_dirty: bool
     branch: str
@@ -51,6 +53,7 @@ class CheckoutStatus:
 @dataclass
 class UpstreamProvenance:
     """Axis 2: Upstream software provenance state."""
+
     status: ProvenanceStatus
     remote_sha: str = ""
     target_ref: str = ""
@@ -68,6 +71,7 @@ class UpstreamProvenance:
 @dataclass
 class TwoAxisStatus:
     """Unified inspection combining local deployment and upstream provenance."""
+
     app_name: str
     checkout: CheckoutStatus
     provenance: UpstreamProvenance
@@ -198,12 +202,12 @@ def resolve_upstream_provenance(
 
     # Commits pinned directly in manifest cannot be checked via ls-remote ref matching
     if source.ref_type == RefType.COMMIT:
-        is_match = (
-            local_commit and (
-                source.ref.startswith(local_commit) or local_commit.startswith(source.ref)
-            )
+        is_match = local_commit and (
+            source.ref.startswith(local_commit) or local_commit.startswith(source.ref)
         )
-        status = ProvenanceStatus.SYNCED if is_match else ProvenanceStatus.UPDATE_AVAILABLE
+        status = (
+            ProvenanceStatus.SYNCED if is_match else ProvenanceStatus.UPDATE_AVAILABLE
+        )
         return UpstreamProvenance(
             status=status,
             remote_sha=source.ref,
@@ -248,10 +252,10 @@ def resolve_upstream_provenance(
     for line in proc.stdout.splitlines():
         parts = line.strip().split()
         if len(parts) >= 2 and (
-            parts[1] == target_ref or
-            parts[1] == f"refs/heads/{target_ref}" or
-            parts[1] == f"refs/tags/{target_ref}" or
-            parts[1] == f"refs/tags/{target_ref}^{{}}"
+            parts[1] == target_ref
+            or parts[1] == f"refs/heads/{target_ref}"
+            or parts[1] == f"refs/tags/{target_ref}"
+            or parts[1] == f"refs/tags/{target_ref}^{{}}"
         ):
             remote_sha = parts[0]
             # Peaked tags (^{}) take precedence over lightweight tag refs
@@ -271,7 +275,9 @@ def resolve_upstream_provenance(
 
     # Compare local commit with remote SHA
     is_synced = False
-    if local_commit and (remote_sha.startswith(local_commit) or local_commit.startswith(remote_sha[:7])):
+    if local_commit and (
+        remote_sha.startswith(local_commit) or local_commit.startswith(remote_sha[:7])
+    ):
         is_synced = True
 
     status = ProvenanceStatus.SYNCED if is_synced else ProvenanceStatus.UPDATE_AVAILABLE

@@ -1,20 +1,19 @@
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import appctl_engine as engine
 import pytest
 
 # Import appctl engine
-CORE_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(CORE_ROOT / "scripts"))
-
-import appctl_engine as engine
+# CORE_ROOT = Path(__file__).resolve().parent.parent.parent
+# sys.path.insert(0, str(CORE_ROOT / "scripts"))
 
 
 @dataclass
 class AppFactory:
     """Helper class to generate mock app directories and configurations"""
+
     sites_dir: Path
 
     def create(
@@ -28,8 +27,11 @@ class AppFactory:
         if manifest_yaml:
             (app_dir / "app.yaml").write_text(manifest_yaml, encoding="utf-8")
         if has_compose:
-            (app_dir / "docker-compose.yml").write_text("services: {}\n", encoding="utf-8")
+            (app_dir / "docker-compose.yml").write_text(
+                "services: {}\n", encoding="utf-8"
+            )
         return app_dir
+
 
 @pytest.fixture
 def mock_sites_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
@@ -39,22 +41,23 @@ def mock_sites_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(engine, "HOMELAB_DOMAIN", "mydomain.test")
     return sites
 
+
 @pytest.fixture
 def app_factory(mock_sites_dir: Path) -> AppFactory:
     """Fixture that provides the AppFactory instance to test"""
     return AppFactory(mock_sites_dir)
 
+
 @pytest.fixture
-def mock_core_dir(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch
-) -> Path:
+def mock_core_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Fixture that creates an isolated Core directory and points engine.CORE_DIR to it"""
     core = tmp_path / "CORE"
     core.mkdir(parents=True, exist_ok=True)
     return core
 
+
 ## GREEN TEST: Existing implementation should not break
+
 
 def test_resolve_app_hierarchy(app_factory: AppFactory):
     """Ensure resolution follows: Canonical Name > Alias > Dir Name > Prefix"""
@@ -73,6 +76,7 @@ def test_resolve_app_hierarchy(app_factory: AppFactory):
     assert engine.resolve_app("homelab-jellyfin", apps) is not None
     assert engine.resolve_app("unknown", apps) is None
 
+
 def test_manifest_data_overrides_default_values(app_factory: AppFactory):
     """Ensure app.yaml values successfully override the system defaults"""
     app_factory.create(
@@ -84,7 +88,7 @@ def test_manifest_data_overrides_default_values(app_factory: AppFactory):
         visible: false
         networks:
             - custom-net
-        """
+        """,
     )
 
     apps = engine.get_sites_apps()
@@ -94,6 +98,7 @@ def test_manifest_data_overrides_default_values(app_factory: AppFactory):
     assert app.domain == "custom.roadtotech.local"
     assert app.auth is False
     assert app.networks == ["custom-net"]
+
 
 def test_sites_app_normalization(app_factory: AppFactory):
     """Ensure missing or badly typed manifest fields are safely normalized"""
@@ -106,7 +111,7 @@ def test_sites_app_normalization(app_factory: AppFactory):
         auth: "False" # should evaluate based on boolean casting
         homepage:
             weight: "99"    # this should be casted as an int
-        """
+        """,
     )
     apps = engine.get_sites_apps()
     app = engine.resolve_app("testapp", apps)
@@ -131,7 +136,7 @@ def test_sites_app_source_provenance_normalization(app_factory: AppFactory):
             type: git
             url: https://git.example.com/operator/bitetrack.git
             ref: v1.2.0
-        """
+        """,
     )
     # 2. Source-backed app with default ref (main)
     app_factory.create(
@@ -140,14 +145,14 @@ def test_sites_app_source_provenance_normalization(app_factory: AppFactory):
         name: doc2site
         source:
             url: https://git.example.com/operator/doc2site.git
-        """
+        """,
     )
     # 3. Image-only app (no source block)
     app_factory.create(
         dir_name="homelab-jellyfin",
         manifest_yaml="""
         name: jellyfin
-        """
+        """,
     )
 
     apps = engine.get_sites_apps()
@@ -177,7 +182,7 @@ def test_sites_app_source_provenance_normalization(app_factory: AppFactory):
         name: malformed
         source:
             url: file:///etc/passwd
-        """
+        """,
     )
     apps_updated = engine.get_sites_apps()
     malformed = engine.resolve_app("malformed", apps_updated)
@@ -189,8 +194,10 @@ def test_sites_app_source_provenance_normalization(app_factory: AppFactory):
 
 ## RED TESTS: TDD Goals for next implementation
 
+
 def test_docker_status_parser_running(monkeypatch):
     """Ensure get_docker_status reports running compose stack when all containers are running."""
+
     def mock_run(args, **kwargs):
         mock = MagicMock()
         if "ps" in args:
@@ -207,6 +214,7 @@ def test_docker_status_parser_running(monkeypatch):
 
 def test_docker_status_parser_stopped(monkeypatch):
     """Ensure get_docker_status reports stopped when no containers exist."""
+
     def mock_run(args, **kwargs):
         mock = MagicMock()
         if "ps" in args:
@@ -221,6 +229,7 @@ def test_docker_status_parser_stopped(monkeypatch):
 
 def test_docker_status_parser_degraded(monkeypatch):
     """Ensure get_docker_status reports degraded when partial containers are running."""
+
     def mock_run(args, **kwargs):
         mock = MagicMock()
         if "ps" in args:
@@ -244,6 +253,7 @@ def test_docker_status_parser_not_stack(tmp_path: Path):
 
 def test_docker_status_single_container(monkeypatch):
     """Ensure get_docker_status inspects single Core container by name."""
+
     def mock_run(args, **kwargs):
         mock = MagicMock()
         if "authelia" in args:
@@ -260,6 +270,7 @@ def test_docker_status_single_container(monkeypatch):
 
 def test_docker_status_error_handling(monkeypatch):
     """Ensure get_docker_status handles subprocess failures gracefully."""
+
     def mock_err(*args, **kwargs):
         raise OSError("Docker socket unreachable")
 
@@ -269,6 +280,7 @@ def test_docker_status_error_handling(monkeypatch):
 
 def test_docker_image_revision_extraction(monkeypatch):
     """Ensure get_docker_image_revision extracts org.opencontainers.image.revision."""
+
     def mock_run(args, **kwargs):
         mock = MagicMock()
         if "ps" in args:
@@ -278,7 +290,10 @@ def test_docker_image_revision_extraction(monkeypatch):
         return mock
 
     monkeypatch.setattr("subprocess.run", mock_run)
-    assert engine.get_docker_image_revision("/fake/dir") == "9d82577f489f0d478e465a36077538d0ded16ba5"
+    assert (
+        engine.get_docker_image_revision("/fake/dir")
+        == "9d82577f489f0d478e465a36077538d0ded16ba5"
+    )
 
     def mock_run_empty(args, **kwargs):
         mock = MagicMock()
@@ -293,9 +308,8 @@ def test_docker_image_revision_extraction(monkeypatch):
 
 
 def test_homepage_sync_groups_and_sorts_correctly(
-    mock_core_dir: Path,
-    app_factory: AppFactory,
-    monkeypatch):
+    mock_core_dir: Path, app_factory: AppFactory, monkeypatch
+):
     """
     TDD Goal: Port `cmd_sync_homepage` to V2 using the new Dataclass structure.
     It must group by `homepage.group` and sort by `homepage.weight`.
@@ -312,7 +326,7 @@ def test_homepage_sync_groups_and_sorts_correctly(
             title: App1
             group: Group B
             weight: 20
-        """
+        """,
     )
 
     app_factory.create(
@@ -324,7 +338,7 @@ def test_homepage_sync_groups_and_sorts_correctly(
             title: App2
             group: Group A
             weight: 10
-        """
+        """,
     )
 
     monkeypatch.setattr(engine, "get_core_services", list)
@@ -334,8 +348,10 @@ def test_homepage_sync_groups_and_sorts_correctly(
     assert output_file.exists(), "The services.yaml file must be generated"
 
     content = output_file.read_text()
-    assert content.find("- Group A") < content.find("- Group B") # Group A should appear before Group B
-    assert "App2" in content # App 2 is in the file
+    assert content.find("- Group A") < content.find(
+        "- Group B"
+    )  # Group A should appear before Group B
+    assert "App2" in content  # App 2 is in the file
 
 
 def test_homepage_sync_core_services_domain_isolation(
@@ -380,7 +396,9 @@ def test_resolve_core_stack_type():
     assert traefik.container == "traefik"
 
 
-def test_manifest_parsing_delegates_to_core_manifest_and_validates_env(app_factory: AppFactory):
+def test_manifest_parsing_delegates_to_core_manifest_and_validates_env(
+    app_factory: AppFactory,
+):
     """Ensure manifest parsing uses core_manifest and catches invalid env keys."""
     app_factory.create(
         dir_name="homelab-badenv",
@@ -397,7 +415,9 @@ def test_manifest_parsing_delegates_to_core_manifest_and_validates_env(app_facto
     assert "Invalid or reserved environment variable key" in app.manifest_error
 
 
-def test_cmd_resolve_fails_closed_on_manifest_error(app_factory: AppFactory, capsys: pytest.CaptureFixture):
+def test_cmd_resolve_fails_closed_on_manifest_error(
+    app_factory: AppFactory, capsys: pytest.CaptureFixture
+):
     """Ensure cmd_resolve exits with non-zero on workload with manifest errors."""
     app_factory.create(
         dir_name="homelab-corrupt",
@@ -449,7 +469,9 @@ def test_unification_uses_core_manifest_dataclasses(app_factory: AppFactory):
     assert app.source.transport == core_manifest.TransportScheme.HTTPS
 
 
-def test_cmd_list_flags_manifest_error(app_factory: AppFactory, capsys: pytest.CaptureFixture):
+def test_cmd_list_flags_manifest_error(
+    app_factory: AppFactory, capsys: pytest.CaptureFixture
+):
     """Ensure cmd_list flags workloads with manifest errors instead of swallowing them."""
     app_factory.create(
         dir_name="homelab-broken",
@@ -462,4 +484,3 @@ def test_cmd_list_flags_manifest_error(app_factory: AppFactory, capsys: pytest.C
     engine.cmd_list([])
     captured = capsys.readouterr()
     assert "Manifest Error" in captured.out
-

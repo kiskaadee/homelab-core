@@ -10,11 +10,11 @@ from pathlib import Path
 
 import yaml
 
+# Comment-out reason: testing pyproject-level pythonpath definition
 CORE_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def test_socket_proxy_is_strictly_read_only():
-
     """Ensure socket-proxy container blocks state-modifying requests (POST=0, DELETE=0)."""
     compose_path = CORE_ROOT / "docker-compose.yml"
     with open(compose_path, encoding="utf-8") as f:
@@ -47,8 +47,12 @@ def test_no_direct_docker_sock_mounts_except_socket_proxy():
         volumes = svc.get("volumes", [])
         for vol in volumes:
             if isinstance(vol, str) and "/var/run/docker.sock" in vol:
-                assert name == "socket-proxy", f"Service '{name}' directly mounts docker.sock!"
-                assert vol.endswith(":ro"), "socket-proxy docker.sock mount must be read-only (:ro)"
+                assert name == "socket-proxy", (
+                    f"Service '{name}' directly mounts docker.sock!"
+                )
+                assert vol.endswith(":ro"), (
+                    "socket-proxy docker.sock mount must be read-only (:ro)"
+                )
 
 
 def test_no_privileged_containers():
@@ -60,7 +64,9 @@ def test_no_privileged_containers():
     services = compose.get("services", {})
     for name, svc in services.items():
         privileged = svc.get("privileged", False)
-        assert privileged is not True, f"Service '{name}' is configured as privileged: true!"
+        assert privileged is not True, (
+            f"Service '{name}' is configured as privileged: true!"
+        )
 
 
 def test_no_shell_true_in_core_scripts():
@@ -78,10 +84,14 @@ def test_portainer_is_deprecated_and_absent():
         compose = yaml.safe_load(f)
 
     services = compose.get("services", {})
-    assert "portainer" not in services, "Deprecated service 'portainer' must not exist in docker-compose.yml"
+    assert "portainer" not in services, (
+        "Deprecated service 'portainer' must not exist in docker-compose.yml"
+    )
 
     volumes = compose.get("volumes", {}) or {}
-    assert "portainer_data" not in volumes, "Deprecated volume 'portainer_data' must not exist in docker-compose.yml"
+    assert "portainer_data" not in volumes, (
+        "Deprecated volume 'portainer_data' must not exist in docker-compose.yml"
+    )
 
 
 def test_no_eval_in_appctl_script():
@@ -113,7 +123,9 @@ env:
 """
 
     (app_dir / "app.yaml").write_text(app_yaml.strip(), encoding="utf-8")
-    (app_dir / "docker-compose.yml").write_text("services:\n  web:\n    image: nginx\n", encoding="utf-8")
+    (app_dir / "docker-compose.yml").write_text(
+        "services:\n  web:\n    image: nginx\n", encoding="utf-8"
+    )
 
     # 2. Setup mock docker binary to capture environment without requiring a running Docker daemon
     mock_bin = tmp_path / "bin"
@@ -152,10 +164,13 @@ exit 0
         check=False,
     )
 
-
     # 4. Assertions: command substitution was not executed, script ran, and mock docker received literal value
-    assert not canary.exists(), "Command substitution was executed on the host during environment setup!"
-    assert res.returncode == 0, f"appctl config failed: {res.stderr}\nStdout: {res.stdout}"
+    assert not canary.exists(), (
+        "Command substitution was executed on the host during environment setup!"
+    )
+    assert res.returncode == 0, (
+        f"appctl config failed: {res.stderr}\nStdout: {res.stdout}"
+    )
     assert "MOCK_DOCKER_COMPOSE_CONFIG" in res.stdout
     assert f"CAPTURED_INJECTION={payload}" in res.stdout
     assert "CAPTURED_NORMAL=safe_value" in res.stdout
@@ -182,16 +197,17 @@ def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests(
     for file_path in candidate_files:
         if (
             file_path.is_file()
-            and file_path.suffix in (".py", ".sh", ".bash", ".yml", ".yaml", ".md", ".nix", "")
+            and file_path.suffix
+            in (".py", ".sh", ".bash", ".yml", ".yaml", ".md", ".nix", "")
             and file_path.name != "test_security_invariants.py"
         ):
             content = file_path.read_text(encoding="utf-8", errors="ignore")
             for term in forbidden:
                 if term in content:
-                    violations.append(f"{file_path.relative_to(CORE_ROOT)}: contains prohibited literal '{term}'")
+                    violations.append(
+                        f"{file_path.relative_to(CORE_ROOT)}: contains prohibited literal '{term}'"
+                    )
 
-    assert not violations, "Platform genericism violations detected:\n" + "\n".join(violations)
-
-
-
-
+    assert not violations, "Platform genericism violations detected:\n" + "\n".join(
+        violations
+    )

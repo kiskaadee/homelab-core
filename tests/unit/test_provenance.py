@@ -4,14 +4,12 @@ Unit test suite for scripts/provenance.py (Two-Axis Inspection & Provenance Reso
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-# Add scripts directory to path
-CORE_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(CORE_ROOT / "scripts"))
-
+# # Add scripts directory to path
+# CORE_ROOT = Path(__file__).resolve().parent.parent.parent
+# sys.path.insert(0, str(CORE_ROOT / "scripts"))
 from core_manifest import Manifest, RefType, SourceConfig, TransportScheme
 from provenance import (
     ProvenanceStatus,
@@ -43,12 +41,28 @@ def test_get_local_checkout_status_clean_repo(tmp_path: Path):
     app_dir = tmp_path / "git_app"
     app_dir.mkdir()
     env = _clean_git_env()
-    subprocess.run(["git", "-C", str(app_dir), "init", "-b", "main"], check=True, capture_output=True, env=env)
-    subprocess.run(["git", "-C", str(app_dir), "config", "user.email", "test@example.com"], check=True, env=env)
-    subprocess.run(["git", "-C", str(app_dir), "config", "user.name", "Test"], check=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(app_dir), "init", "-b", "main"],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(app_dir), "config", "user.email", "test@example.com"],
+        check=True,
+        env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(app_dir), "config", "user.name", "Test"], check=True, env=env
+    )
     (app_dir / "file.txt").write_text("hello", encoding="utf-8")
     subprocess.run(["git", "-C", str(app_dir), "add", "file.txt"], check=True, env=env)
-    subprocess.run(["git", "-C", str(app_dir), "commit", "-m", "init"], check=True, capture_output=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(app_dir), "commit", "-m", "init"],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
 
     status = get_local_checkout_status(app_dir)
     assert status.is_git is True
@@ -62,12 +76,28 @@ def test_get_local_checkout_status_dirty_repo(tmp_path: Path):
     app_dir = tmp_path / "git_dirty_app"
     app_dir.mkdir()
     env = _clean_git_env()
-    subprocess.run(["git", "-C", str(app_dir), "init", "-b", "main"], check=True, capture_output=True, env=env)
-    subprocess.run(["git", "-C", str(app_dir), "config", "user.email", "test@example.com"], check=True, env=env)
-    subprocess.run(["git", "-C", str(app_dir), "config", "user.name", "Test"], check=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(app_dir), "init", "-b", "main"],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(app_dir), "config", "user.email", "test@example.com"],
+        check=True,
+        env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(app_dir), "config", "user.name", "Test"], check=True, env=env
+    )
     (app_dir / "file.txt").write_text("hello", encoding="utf-8")
     subprocess.run(["git", "-C", str(app_dir), "add", "file.txt"], check=True, env=env)
-    subprocess.run(["git", "-C", str(app_dir), "commit", "-m", "init"], check=True, capture_output=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(app_dir), "commit", "-m", "init"],
+        check=True,
+        capture_output=True,
+        env=env,
+    )
 
     # Modify file to create dirty state
     (app_dir / "file.txt").write_text("modified", encoding="utf-8")
@@ -131,7 +161,10 @@ def test_resolve_upstream_provenance_timeout():
         transport=TransportScheme.HTTPS,
     )
 
-    with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd=["git"], timeout=10.0)):
+    with patch(
+        "subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd=["git"], timeout=10.0),
+    ):
         prov = resolve_upstream_provenance(source, local_commit="abc1234", timeout=10.0)
 
         assert prov.status == ProvenanceStatus.TIMEOUT
@@ -183,13 +216,17 @@ def test_inspect_workload_two_axis(tmp_path: Path):
     )
 
     # Without fetch_upstream: Axis 2 returns UNKNOWN
-    status_no_fetch = inspect_workload_two_axis(tmp_path, manifest, fetch_upstream=False)
+    status_no_fetch = inspect_workload_two_axis(
+        tmp_path, manifest, fetch_upstream=False
+    )
     assert status_no_fetch.provenance.status == ProvenanceStatus.UNKNOWN
     assert "Pass --fetch" in status_no_fetch.provenance.message
 
     # With fetch_upstream: Axis 2 queries remote
     with patch("provenance.resolve_upstream_provenance") as mock_resolve:
         mock_resolve.return_value = MagicMock(status=ProvenanceStatus.SYNCED)
-        status_fetch = inspect_workload_two_axis(tmp_path, manifest, fetch_upstream=True)
+        status_fetch = inspect_workload_two_axis(
+            tmp_path, manifest, fetch_upstream=True
+        )
         assert status_fetch.provenance.status == ProvenanceStatus.SYNCED
         mock_resolve.assert_called_once()

@@ -28,7 +28,7 @@ PROVIDERS = [
     "https://api.ipify.org",
     "https://ifconfig.me/ip",
     "https://icanhazip.com",
-    "https://wtfismyip.com/text"
+    "https://wtfismyip.com/text",
 ]
 
 
@@ -78,14 +78,11 @@ def get_public_ip():
     for provider in PROVIDERS:
         try:
             req = urllib.request.Request(
-                provider,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (NixOS WAN Monitor)'
-                }
+                provider, headers={"User-Agent": "Mozilla/5.0 (NixOS WAN Monitor)"}
             )
             # Fetch with 5s timeout to avoid hanging the systemd service
             with urllib.request.urlopen(req, timeout=5) as response:
-                ip = response.read().decode('utf-8').strip()
+                ip = response.read().decode("utf-8").strip()
                 if is_valid_public_ipv4(ip):
                     return ip
                 else:
@@ -94,8 +91,7 @@ def get_public_ip():
             errors.append(f"{provider}: {e!s}")
 
     print(
-        f"Error: All IP discovery providers failed. Details: {errors}",
-        file=sys.stderr
+        f"Error: All IP discovery providers failed. Details: {errors}", file=sys.stderr
     )
     return None
 
@@ -132,11 +128,7 @@ def record_ip(ip, status, details=None):
     Appends a new event entry into the JSONLines history registry.
     """
     os.makedirs(os.path.dirname(HISTORY_FILE), exist_ok=True)
-    entry = {
-        "timestamp": datetime.now(tz=UTC).isoformat(),
-        "ip": ip,
-        "status": status
-    }
+    entry = {"timestamp": datetime.now(tz=UTC).isoformat(), "ip": ip, "status": status}
     if details:
         entry["details"] = details
     try:
@@ -164,10 +156,7 @@ def trigger_ddclient():
         if res.returncode == 0:
             return True, None
         else:
-            err_msg = (
-                f"systemctl exited with {res.returncode}: "
-                f"{res.stderr.strip()}"
-            )
+            err_msg = f"systemctl exited with {res.returncode}: {res.stderr.strip()}"
             return False, err_msg
     except (OSError, subprocess.SubprocessError) as e:
         return False, str(e)

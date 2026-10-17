@@ -36,17 +36,18 @@ class ManifestValidationError(Exception):
     """Raised when an application manifest violates schema or security constraints."""
 
 
-
 class RefType(str, Enum):
     """Semantic classification of an upstream git reference."""
-    BRANCH = "branch"      # Moving branch (e.g. main, master, develop, release/v1)
-    TAG = "tag"            # Pinned release tag (e.g. v1.0.0, 2.3.1)
-    COMMIT = "commit"      # Immutable commit SHA (40-character hex)
+
+    BRANCH = "branch"  # Moving branch (e.g. main, master, develop, release/v1)
+    TAG = "tag"  # Pinned release tag (e.g. v1.0.0, 2.3.1)
+    COMMIT = "commit"  # Immutable commit SHA (40-character hex)
     UNKNOWN = "unknown"
 
 
 class TransportScheme(str, Enum):
     """Supported secure git network transports."""
+
     HTTPS = "https"
     SSH = "ssh"
     GIT_SCP = "git_scp"
@@ -57,11 +58,20 @@ NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]*$")
 COMMIT_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 SHORT_SHA_RE = re.compile(r"^[0-9a-fA-F]{7,12}$")
 SEMVER_TAG_RE = re.compile(r"^v?[0-9]+(\.[0-9]+)+([a-zA-Z0-9._-]*)$")
-SCP_URL_RE = re.compile(r"^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+:([0-9]+/)?([a-zA-Z0-9._-]+/)*[a-zA-Z0-9._-]+(\.git)?$")
+SCP_URL_RE = re.compile(
+    r"^[a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+:([0-9]+/)?([a-zA-Z0-9._-]+/)*[a-zA-Z0-9._-]+(\.git)?$"
+)
 ENV_KEY_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 RESERVED_ENV_KEYS = {
-    "PATH", "LD_PRELOAD", "IFS", "SHELL", "USER",
-    "CORE_DIR", "SITES_DIR", "ENV_FILE", "HOMESERVER_ENV"
+    "PATH",
+    "LD_PRELOAD",
+    "IFS",
+    "SHELL",
+    "USER",
+    "CORE_DIR",
+    "SITES_DIR",
+    "ENV_FILE",
+    "HOMESERVER_ENV",
 }
 
 ALLOWED_STRATEGIES = {"compose"}
@@ -80,35 +90,49 @@ def validate_transport(url: str) -> tuple[TransportScheme, str]:
 
     # Reject path traversal / directory escapes
     if ".." in clean_url or "\\" in clean_url or clean_url.startswith(("/", "~")):
-        raise ManifestValidationError(f"Prohibited filesystem path or traversal in source URL: '{clean_url}'")
+        raise ManifestValidationError(
+            f"Prohibited filesystem path or traversal in source URL: '{clean_url}'"
+        )
 
     # 1. HTTPS transport
     if clean_url.startswith("https://"):
         parsed = urlparse(clean_url)
         if not parsed.netloc:
-            raise ManifestValidationError(f"Malformed HTTPS source URL (missing host): '{clean_url}'")
+            raise ManifestValidationError(
+                f"Malformed HTTPS source URL (missing host): '{clean_url}'"
+            )
         if not parsed.path or parsed.path == "/":
-            raise ManifestValidationError(f"Malformed HTTPS source URL (missing repository path): '{clean_url}'")
+            raise ManifestValidationError(
+                f"Malformed HTTPS source URL (missing repository path): '{clean_url}'"
+            )
         return TransportScheme.HTTPS, clean_url
 
     # 2. Standard SSH transport (ssh://[user@]host[:port]/path)
     if clean_url.startswith("ssh://"):
         parsed = urlparse(clean_url)
         if not parsed.netloc:
-            raise ManifestValidationError(f"Malformed SSH source URL (missing host): '{clean_url}'")
+            raise ManifestValidationError(
+                f"Malformed SSH source URL (missing host): '{clean_url}'"
+            )
         if not parsed.path or parsed.path == "/":
-            raise ManifestValidationError(f"Malformed SSH source URL (missing repository path): '{clean_url}'")
+            raise ManifestValidationError(
+                f"Malformed SSH source URL (missing repository path): '{clean_url}'"
+            )
         return TransportScheme.SSH, clean_url
 
     # 3. SCP-style SSH transport (git@host:owner/repo.git)
-    if clean_url.startswith("git@") or ("@" in clean_url and ":" in clean_url and not clean_url.startswith("http")):
+    if clean_url.startswith("git@") or (
+        "@" in clean_url and ":" in clean_url and not clean_url.startswith("http")
+    ):
         if SCP_URL_RE.match(clean_url):
             return TransportScheme.GIT_SCP, clean_url
         raise ManifestValidationError(f"Malformed SCP-style source URL: '{clean_url}'")
 
     # Reject plaintext HTTP or unsupported schemes
     if clean_url.startswith("http://"):
-        raise ManifestValidationError(f"Insecure HTTP source URL rejected (HTTPS or SSH required): '{clean_url}'")
+        raise ManifestValidationError(
+            f"Insecure HTTP source URL rejected (HTTPS or SSH required): '{clean_url}'"
+        )
 
     raise ManifestValidationError(
         f"Invalid source.url scheme: '{clean_url}'. "
@@ -141,7 +165,16 @@ def classify_ref(ref_str: str) -> tuple[RefType, str]:
         return RefType.TAG, ref
 
     # Standard branch naming patterns
-    if ref in {"main", "master", "develop", "dev", "trunk", "staging", "prod", "production"}:
+    if ref in {
+        "main",
+        "master",
+        "develop",
+        "dev",
+        "trunk",
+        "staging",
+        "prod",
+        "production",
+    }:
         return RefType.BRANCH, ref
 
     if ref.startswith(("feat/", "fix/", "release/", "chore/", "refactor/")):
@@ -153,6 +186,7 @@ def classify_ref(ref_str: str) -> tuple[RefType, str]:
 
 class SourceConfig(BaseModel):
     """Upstream source provenance descriptor."""
+
     model_config = ConfigDict(extra="forbid")
 
     url: str
@@ -167,7 +201,9 @@ class SourceConfig(BaseModel):
         if isinstance(data, dict):
             src_type = str(data.get("type", "git")).strip().lower()
             if src_type != "git":
-                raise ManifestValidationError(f"Unsupported source type '{src_type}'. Only 'git' is supported.")
+                raise ManifestValidationError(
+                    f"Unsupported source type '{src_type}'. Only 'git' is supported."
+                )
             data["type"] = src_type
 
             raw_url = data.get("url")
@@ -198,6 +234,7 @@ class SourceConfig(BaseModel):
 
 class DeploymentConfig(BaseModel):
     """Continuous deployment strategy and action policy."""
+
     model_config = ConfigDict(extra="forbid")
 
     strategy: str = "compose"
@@ -237,6 +274,7 @@ class DeploymentConfig(BaseModel):
 
 class HomepageConfig(BaseModel):
     """Dashboard card metadata for Homepage."""
+
     model_config = ConfigDict(extra="forbid")
 
     title: str
@@ -262,6 +300,7 @@ class Manifest(BaseModel):
     Authoritative Workload Manifest Model (Schema v1.0).
     Represents the full contract declared in a workload's app.yaml.
     """
+
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     name: str
@@ -282,8 +321,14 @@ class Manifest(BaseModel):
     def prepare_manifest(cls, data: Any) -> Any:
         if isinstance(data, dict):
             raw_name = data.get("name")
-            if raw_name is None or not isinstance(raw_name, str) or not raw_name.strip():
-                raise ManifestValidationError("Manifest is missing mandatory string field 'name'.")
+            if (
+                raw_name is None
+                or not isinstance(raw_name, str)
+                or not raw_name.strip()
+            ):
+                raise ManifestValidationError(
+                    "Manifest is missing mandatory string field 'name'."
+                )
             clean_name = raw_name.strip()
             if not NAME_RE.match(clean_name):
                 raise ManifestValidationError(
@@ -359,7 +404,12 @@ class Manifest(BaseModel):
     @property
     def is_internal(self) -> bool:
         """True if the workload does not expose a public TLS endpoint."""
-        return not self.domain or self.domain == "internal" or self.domain.endswith(".local") or ":" in self.domain
+        return (
+            not self.domain
+            or self.domain == "internal"
+            or self.domain.endswith(".local")
+            or ":" in self.domain
+        )
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -387,7 +437,7 @@ class Manifest(BaseModel):
 def parse_manifest(raw_input: str | Path | dict[str, Any]) -> Manifest:
     """
     Parse and strictly validate an app.yaml manifest into an authoritative Manifest object.
-    
+
     Accepts:
     - Path object pointing to an app.yaml
     - Raw YAML string content
@@ -401,23 +451,35 @@ def parse_manifest(raw_input: str | Path | dict[str, Any]) -> Manifest:
         try:
             content = raw_input.read_text(encoding="utf-8")
         except OSError as e:
-            raise ManifestValidationError(f"Failed to read manifest {raw_input}: {e}") from e
+            raise ManifestValidationError(
+                f"Failed to read manifest {raw_input}: {e}"
+            ) from e
         try:
-            data = (yaml.safe_load(content) if yaml else _parse_yaml_basic(content)) or {}
+            data = (
+                yaml.safe_load(content) if yaml else _parse_yaml_basic(content)
+            ) or {}
         except Exception as e:
-            raise ManifestValidationError(f"YAML parsing error in {raw_input}: {e}") from e
+            raise ManifestValidationError(
+                f"YAML parsing error in {raw_input}: {e}"
+            ) from e
     elif isinstance(raw_input, str):
         try:
-            data = (yaml.safe_load(raw_input) if yaml else _parse_yaml_basic(raw_input)) or {}
+            data = (
+                yaml.safe_load(raw_input) if yaml else _parse_yaml_basic(raw_input)
+            ) or {}
         except Exception as e:
             raise ManifestValidationError(f"YAML parsing error: {e}") from e
     elif isinstance(raw_input, dict):
         data = raw_input
     else:
-        raise ManifestValidationError(f"Invalid input type for manifest parsing: {type(raw_input)}")
+        raise ManifestValidationError(
+            f"Invalid input type for manifest parsing: {type(raw_input)}"
+        )
 
     if not isinstance(data, dict):
-        raise ManifestValidationError("Manifest root must be a YAML dictionary mapping.")
+        raise ManifestValidationError(
+            "Manifest root must be a YAML dictionary mapping."
+        )
 
     try:
         return Manifest.model_validate(data)
@@ -433,7 +495,9 @@ def parse_manifest(raw_input: str | Path | dict[str, Any]) -> Manifest:
             msg = msg.removeprefix("Value error, ")
         loc = ".".join(str(p) for p in first_error.get("loc", []))
         if loc and first_error.get("type") == "extra_forbidden":
-            raise ManifestValidationError(f"Manifest contains unrecognized or forbidden field '{loc}'.") from e
+            raise ManifestValidationError(
+                f"Manifest contains unrecognized or forbidden field '{loc}'."
+            ) from e
         raise ManifestValidationError(msg) from e
 
 

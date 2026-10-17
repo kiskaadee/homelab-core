@@ -36,7 +36,9 @@ def test_required_architectural_paths_exist():
 
     pre_commit = CORE_ROOT / ".githooks" / "pre-commit"
     assert pre_commit.is_file(), ".githooks/pre-commit must be a regular file"
-    assert os.access(pre_commit, os.X_OK), ".githooks/pre-commit must be marked executable"
+    assert os.access(pre_commit, os.X_OK), (
+        ".githooks/pre-commit must be marked executable"
+    )
 
 
 def test_deprecated_legacy_structures_are_absent():
@@ -61,4 +63,7 @@ def test_unlicense_preserved():
     unlicense = CORE_ROOT / "UNLICENSE"
     assert unlicense.is_file(), "UNLICENSE file must be present"
     content = unlicense.read_text(encoding="utf-8")
-    assert "This is free and unencumbered software released into the public domain." in content
+    assert (
+        "This is free and unencumbered software released into the public domain."
+        in content
+    )
