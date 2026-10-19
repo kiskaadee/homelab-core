@@ -12,6 +12,7 @@ import datetime
 import fcntl
 import hashlib
 import hmac
+import http.client
 import json
 import logging
 import os
@@ -19,6 +20,16 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
+
+from appctl_contracts import OperationRequest, OperationType
+from core_manifest import (
+    ALLOWED_ACTIONS,
+    ALLOWED_STRATEGIES,
+    ManifestValidationError,
+    parse_manifest,
+)
+from pydantic import ValidationError
 
 try:
     import yaml
@@ -39,6 +50,12 @@ DEFAULT_SECRET_PATH = Path(
 STATE_DIR = Path(
     os.environ.get("GITOPS_STATE_DIR", Path.home() / ".local/state/homelab/gitops")
 )
+DEFAULT_APPCTL_SOCKET_PATH = Path(
+    os.environ.get("APPCTL_SOCKET_PATH", "/run/homelab/appctl.sock")
+)
+DEFAULT_APPCTL_TOKEN_PATH = Path(
+    os.environ.get("GITOPS_APPCTL_TOKEN_FILE", "/run/secrets/gitops/appctl_token")
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -46,6 +63,70 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("gitops_dispatcher")
+
+
+def load_appctl_token(token_file: Path | None = None) -> str | None:
+    """
+    Load Bearer token for appctl daemon communication from environment or secrets file.
+    """
+    if "GITOPS_APPCTL_TOKEN" in os.environ:
+        return os.environ["GITOPS_APPCTL_TOKEN"].strip()
+    path = token_file or DEFAULT_APPCTL_TOKEN_PATH
+    if path.is_file():
+        try:
+            return path.read_text(encoding="utf-8").strip()
+        except OSError as e:
+            logger.error(f"Failed to read appctl token from {path}: {e}")
+            return None
+    return None
+
+
+def execute_deployment_via_daemon(
+    target: str,
+    branch: str,
+    socket_path: Path | str | None = None,
+    token: str | None = None,
+) -> bool:
+    """
+    Execute deployment by delegating workload.update to appctl daemon over UDS.
+    """
+    sock = Path(socket_path or DEFAULT_APPCTL_SOCKET_PATH)
+    auth_token = token or load_appctl_token()
+    logger.info(
+        f"Delegating workload.update for '{target}' to daemon at {sock} (branch: {branch})"
+    )
+    from appctl_daemon import send_daemon_request
+
+    try:
+        req = OperationRequest(
+            operation=OperationType.WORKLOAD_UPDATE,
+            target=target,
+            parameters={"expected_branch": branch},
+        )
+        resp = send_daemon_request(
+            endpoint=sock,
+            operation_request=req,
+            token=auth_token,
+            timeout=330.0,
+        )
+        if resp.success:
+            logger.info(f"✨ Deployment of '{target}' via daemon completed successfully.")
+            return True
+        err_msg = resp.error.message if resp.error else "Unknown daemon error"
+        logger.error(f"❌ Deployment of '{target}' via daemon failed: {err_msg}")
+        return False
+    except (
+        OSError,
+        http.client.HTTPException,
+        json.JSONDecodeError,
+        ValidationError,
+        TimeoutError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as e:
+        logger.error(f"❌ Failed to communicate with appctl daemon at {sock}: {e}")
+        return False
 
 
 def load_webhook_secret(secret_file: Path | None = None) -> bytes:
@@ -322,8 +403,6 @@ def resolve_target(repo_name: str) -> tuple[Path | None, dict]:
     return target_dir, deployment_config
 
 
-ALLOWED_ACTIONS = {"git_pull", "compose_up", "compose_build", "compose_restart"}
-ALLOWED_STRATEGIES = {"compose"}
 
 
 PROHIBITED_HOST_NAMESPACES = {"host"}
@@ -630,6 +709,15 @@ def execute_deployment(target_dir: Path, deployment_config: dict, branch: str) -
         )
         return True
 
+    daemon_sock = Path(os.environ.get("APPCTL_SOCKET_PATH", DEFAULT_APPCTL_SOCKET_PATH))
+    if daemon_sock.is_socket():
+        canonical_app_name = target_dir.name.removeprefix("homelab-")
+        return execute_deployment_via_daemon(
+            target=canonical_app_name,
+            branch=expected_branch,
+            socket_path=daemon_sock,
+        )
+
     canonical_app_name = target_dir.name.removeprefix("homelab-")
     manifest_file = target_dir / "app.yaml"
     if manifest_file.is_file():
@@ -903,22 +991,26 @@ def admit_deployment(
 
     # 4. Manifest & Strategy Validation
     manifest_file = target_dir / "app.yaml"
-    manifest = {}
+    manifest: dict[str, Any] = {}
     if manifest_file.is_file():
         try:
-            manifest_text = manifest_file.read_text(encoding="utf-8")
-            manifest = (
-                yaml.safe_load(manifest_text)
-                if yaml
-                else parse_yaml_simple(manifest_text)
-            ) or {}
-        except (OSError, UnicodeDecodeError, ValueError, KeyError, AttributeError) as e:
+            parsed_manifest = parse_manifest(manifest_file)
+            manifest = parsed_manifest.model_dump()
+        except ManifestValidationError as e:
             return (
                 False,
                 None,
                 {},
                 pushed_branch,
-                f"Failed to parse manifest {manifest_file}: {e}",
+                f"Manifest validation error: {e}",
+            )
+        except OSError as e:
+            return (
+                False,
+                None,
+                {},
+                pushed_branch,
+                f"Failed to read manifest {manifest_file}: {e}",
             )
 
         valid, err_msg = validate_manifest_deployment(manifest)

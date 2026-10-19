@@ -375,7 +375,7 @@ class OperationalRouter:
                         message=f"Operation '{operation.value}' requires a non-empty target",
                     ),
                 )
-            resolved_app = resolve_app(target)
+            resolved_app = resolve_app(target, sites_dir=str(self.sites_dir))
             if not resolved_app:
                 return OperationResponse(
                     version="1.0",

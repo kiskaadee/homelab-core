@@ -291,8 +291,9 @@ class OperationResponse(StrictModel):
     success: StrictBool | None = None
     status: Literal["success", "error"] | None = None
     operation_id: StrictStr = Field(min_length=1)
-    operation: FlexibleOperationType = Field(
-        validation_alias=AliasChoices("operation", "action")
+    operation: FlexibleOperationType | StrictStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("operation", "action"),
     )
     target: StrictStr | None = None
     output: StrictStr = ""
@@ -302,7 +303,7 @@ class OperationResponse(StrictModel):
     duration_ms: StrictInt | None = None
 
     @property
-    def action(self) -> OperationType:
+    def action(self) -> OperationType | str | None:
         return self.operation
 
     @model_validator(mode="after")

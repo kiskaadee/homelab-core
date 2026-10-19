@@ -260,7 +260,7 @@ class DeploymentConfig(BaseModel):
                 act_str = str(act).strip().lower()
                 if act_str not in ALLOWED_ACTIONS:
                     raise ManifestValidationError(
-                        f"Prohibited deployment action '{act_str}'. Allowed: {sorted(ALLOWED_ACTIONS)}"
+                        f"Unsupported deployment action '{act_str}' (Prohibited deployment action '{act_str}'). Allowed: {sorted(ALLOWED_ACTIONS)}"
                     )
                 actions.append(act_str)
             if not actions:

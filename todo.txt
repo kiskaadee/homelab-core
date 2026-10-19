@@ -26,7 +26,7 @@ x 2026-10-19 (A) Implement strict Pydantic v2 API contracts, error sanitizer, an
 x 2026-10-19 (A) Implement append-only audit logger with fail-closed disk guard and per-target flock manager in scripts/appctl_audit.py +audit @p4
 x 2026-10-19 (A) Implement SOPS SHA-256 Bearer token authenticator, UDS SO_PEERCRED viewer fallback, and 3-role RBAC policy in scripts/appctl_auth.py +auth @p4
 x 2026-10-19 (B) Implement operational router, pure-Python dotenv loader, Compose AST pre-flight, and revision-consistent workload.update in scripts/appctl_router.py +router @p4
-(B) Implement dual-transport HTTP/1.1 daemon (UDS + loopback TCP) and wire gitops_dispatcher.py worker to daemon in scripts/appctl_daemon.py +daemon @p4
-(B) Add comprehensive unit and security test suite for P4 contracts, RBAC, audit guard, concurrency, and dual-transport parity in tests/unit/test_appctl_daemon.py +test @p4
+x 2026-10-19 (B) Implement dual-transport HTTP/1.1 daemon (UDS + loopback TCP) and wire gitops_dispatcher.py worker to daemon in scripts/appctl_daemon.py +daemon @p4
+x 2026-10-19 (B) Add comprehensive unit and security test suite for P4 contracts, RBAC, audit guard, concurrency, and dual-transport parity in tests/unit/test_appctl_daemon.py +test @p4
 (C) Re-implement scripts/appctl as a thin UDS HTTP client and declare homelab-appctl.service with POSIX ACLs in nixos/modules/homeserver.nix +cli @p4
 (C) Scrub remaining hardcoded domain and username literals across NixOS modules, Compose stack, and config/deployments.yaml and add pyright to flake.nix checks +generic @core
