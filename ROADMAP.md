@@ -1,34 +1,36 @@
 # 🗺️ Homelab Core & Appctl Engineering Roadmap
 
-This document serves as the repository-facing projection of the authoritative **Homelab Architecture Consolidation & Control Plane Roadmap (v5)**.
+This document serves as the repository-facing projection of the authoritative **Homelab Architecture Consolidation & Control Plane Roadmap (v6)** and the locked Milestone P4 boundary specification ([`docs/plans/p4-readiness-plan.md`](docs/plans/p4-readiness-plan.md)).
 
 It describes the implementation trajectory and phased engineering milestones for transitioning Homelab Core into a unified platform driven by the `appctl` Operational Control Plane.
 
-> **Governing Architectural Decisions**: See [`docs/decisions/README.md`](docs/decisions/README.md) for the authoritative ADR index (Control Plane Architecture, 3-Tier Provenance Model, and Pydantic v2 Runtime Validation).
+> **Governing Architectural Decisions**: See [`docs/decisions/README.md`](docs/decisions/README.md) for the authoritative ADR index ([ADR-0001: 3-Tier Provenance Model](docs/decisions/0001-3tier-architecture-and-provenance.md), [ADR-0002: Operational Control Plane Architecture](docs/decisions/0002-appctl-control-plane-architecture.md), and [ADR-0003: Pydantic v2 Runtime Validation](docs/decisions/0003-pydantic-v2-runtime-validation.md)).
 
 ---
 
 ## 🎯 Architectural Invariants Governing Execution
 
 1. **Git is the Authoritative Source of Deployment State**: All workload configurations are versioned in Git. `appctl` reconciles desired Git state into running containers.
-2. **One Logical API Across Dual Transports**: The control-plane API is a single logical command-oriented contract. Unix domain socket (`/run/homelab/appctl.sock`) on the host and HTTP for network clients are transport details.
-3. **Host Access Does Not Confer Authority**: Entering via SSH does not bypass authentication. Every mutating operation requires an explicit, authenticated user-scoped token.
-4. **Separation of Intent from Implementation**: `DeploymentModel` captures implementation-agnostic intent; concrete platform descriptors (`app.yaml` + Compose) are materialized and enforced by `appctl`.
-5. **AI Authoring Boundary**: AI agents act strictly as proposal generators (`DeploymentProposal`). Humans approve the intent (`DeploymentModel`). The AI possesses zero execution authority.
-6. **Secret Reference Invariant**: Deployment definitions store secret references (`secretKeyRef`), never plaintext material, resolved at runtime via `SecretProvider`.
-7. **Clean State Root**: Mutable application runtime data resides strictly under `~/var/lib/homelab/<app>/`, isolated from Git repositories.
+2. **One Logical API Across Dual Transports (`DEC-01`)**: The control-plane API is a single logical HTTP/1.1 command contract (`POST /v1/operations` + `GET /v1/health`) served identically over Unix domain socket (`/run/homelab/appctl.sock`) and loopback TCP (`127.0.0.1:9001`).
+3. **Host Access Does Not Confer Mutation Authority (`DEC-02`)**: Entering via SSH does not bypass authentication. Every mutating operation and sensitive read (`workload.config`, `workload.logs`) requires an explicit Bearer token; tokenless local UDS calls fall back via `SO_PEERCRED` strictly to `homelab-viewer` read-only inspection.
+4. **Dedicated Service Identity & Fail-Closed Audit Guard (`DEC-03`)**: `homelab-appctl.service` executes as isolated user `homelab-appctl:homelab-operators` with mode `0600` append-only `/var/log/homelab/appctl/audit.jsonl`. Mutating operations abort immediately (`500 ERR_EXECUTION_FAILED`) if the pre-execution `DISPATCHED` audit write fails.
+5. **Unified Execution, Pre-Flight & Pure-Python Environment (`DEC-04`, `DEC-05`)**: Both CLI and GitOps worker paths execute through the daemon, enforcing Pydantic v2 manifest validation, `validate_compose_security()` AST checks, and inert pure-Python `.env` assembly (no shell `source` or `eval`).
+6. **Separation of Intent from Implementation**: `DeploymentModel` captures implementation-agnostic intent; concrete platform descriptors (`app.yaml` + Compose) are materialized and enforced by `appctl`.
+7. **AI Authoring Boundary**: AI agents act strictly as proposal generators (`DeploymentProposal`). Humans approve the intent (`DeploymentModel`). The AI possesses zero execution authority.
+8. **Secret Reference Invariant**: Deployment definitions store secret references (`secretKeyRef`), never plaintext material, resolved at runtime via `SecretProvider`.
+9. **Clean State Root**: Mutable application runtime data resides strictly under `~/var/lib/homelab/<app>/`, isolated from Git repositories.
 
 ---
 
 ## 🔍 Current Implementation Baseline vs. Target Architecture
 
-| Architectural Area | Current Implementation Baseline (Milestone P3) | Target Architecture (Roadmap v5) |
+| Architectural Area | Current Implementation Baseline (Milestone P3) | Target Architecture (Roadmap v6) |
 | :--- | :--- | :--- |
-| **`appctl` Architecture** | Bash CLI wrapper (`scripts/appctl`) driving local subprocesses (`docker compose`, `git`) and Python engine. | Dedicated daemon service (`homelab-appctl.service`) exposing one logical API over Unix socket and HTTP. |
-| **Operational Auth** | Host Unix permissions; sourcing runtime secrets from `/run/secrets/`. | Mandatory auth middleware in daemon (P4 admission gate); LLDAP directory RBAC, user-scoped API tokens, and Authelia ForwardAuth (P5). |
-| **Metadata & Schema Engine** | Unified engine (`scripts/appctl_engine.py`) with two-axis provenance and fail-closed Pydantic v2 schema v1.0 parser (`scripts/core_manifest.py`). | Control-plane daemon invokes `core_manifest.py` / `appctl_engine.py` through a stable internal Python interface. |
+| **`appctl` Architecture** | Bash CLI wrapper (`scripts/appctl`) driving local subprocesses (`docker compose`, `git`) and Python engine. | Dedicated daemon service (`homelab-appctl.service`, user `homelab-appctl`) exposing `POST /v1/operations` over Unix socket and HTTP. |
+| **Operational Auth** | Host Unix permissions; sourcing runtime secrets from `/run/secrets/`. | Mandatory SHA-256 Bearer token + 3-role RBAC + UDS `SO_PEERCRED` viewer fallback (P4); LLDAP directory RBAC & Authelia ForwardAuth (P5). |
+| **Metadata & Schema Engine** | Unified engine (`scripts/appctl_engine.py`) with two-axis provenance and fail-closed Pydantic v2 schema v1.0 parser (`scripts/core_manifest.py`). | Control-plane daemon validates requests via Pydantic v2 (`scripts/appctl_contracts.py`) and invokes `core_manifest.py` / `appctl_engine.py`. |
 | **Deployment Model** | Direct authoring of `app.yaml` and `docker-compose.yml` in `~/Sites/<app>/`. | 5-stage lifecycle (planned in P6): `DeploymentProposal` $\to$ operator-approved `DeploymentModel` in Git $\to$ `appctl` materialization. |
-| **GitOps Engine** | Webhook dispatcher (`scripts/gitops_dispatcher.py`) with HMAC-SHA256 auth, Compose AST security validator, and `flock` serialization. | Integrated into control-plane admission, invoking central reconciliation endpoints. |
+| **GitOps Engine** | Webhook dispatcher (`scripts/gitops_dispatcher.py`) with HMAC-SHA256 auth, Compose AST security validator, and `flock` serialization. | Ingress/queue in `gitops_dispatcher.py`; worker delegates `workload.update` to daemon over `/run/homelab/appctl.sock`. |
 | **Secret Distribution** | Age-encrypted `nixos/secrets.yaml` decrypted by `sops-nix` to tmpfs `/run/secrets/`. | Host secrets remain in `sops-nix`; workload secrets referenced by key and projected via `SecretProvider` (planned in P5). |
 | **Dashboard** | `appctl sync` compiles `config/homepage/services.yaml` from `app.yaml` manifests. | Homepage consumes read-only live status from `appctl`; dedicated Operations UI client for management (planned in P7). |
 
@@ -55,7 +57,7 @@ It describes the implementation trajectory and phased engineering milestones for
 **Status**: ✅ **Completed**
 * Merged `refactor/appctl-rework` and `main` into a unified architectural baseline (commit `2297cd5`).
 * Modernized metadata engine with strongly-typed models (`SitesApp`, `CoreService`, `SourceConfig`) and Docker status inspection.
-* Formalized the control-plane ADR and Roadmap v5; marked legacy roadmaps as superseded.
+* Formalized the control-plane ADR and consolidated roadmap; marked legacy roadmaps as superseded.
 * Verified test suite and NixOS flake sandbox evaluation.
 
 ---

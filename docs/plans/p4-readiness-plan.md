@@ -2,7 +2,7 @@
 
 **Status**: ✅ **Approved & Locked (Pre-P4 Security Gate Complete; Ready for Daemon Implementation)**  
 **Target Milestone**: [Milestone P4: Appctl Control Plane Daemon & API](../../ROADMAP.md#milestone-p4-appctl-control-plane-daemon--command-oriented-api)  
-**Governing ADR**: [`homelab-appctl-control-plane-architecture.md`](../decisions/README.md)  
+**Governing ADR**: [`0002-appctl-control-plane-architecture.md`](../decisions/0002-appctl-control-plane-architecture.md)  
 
 ---
 
@@ -97,7 +97,7 @@ This plan resolves the six architectural prerequisites necessary to implement P4
 
 1. **HTTP/1.1 Over Both Transports**: Both the local Unix Domain Socket (`/run/homelab/appctl.sock`) and the loopback TCP listener (`127.0.0.1:9001`) speak standard **HTTP/1.1** and traverse a single shared request pipeline (Body Size Limit $\to$ JSON Parse $\to$ Pydantic v2 Validate $\to$ Auth/RBAC Gate $\to$ Target Resolution & Lock $\to$ Pre-Execution Audit $\to$ Execution $\to$ Post-Execution Audit).
 2. **Single Canonical Operation Endpoint**:
-   - `POST /v1/operations`: Dispatches all 12 canonical domain operations (both read-only and mutating).
+   - `POST /v1/operations`: Dispatches all 13 canonical domain operations (both read-only and mutating).
    - `GET /v1/health`: Convenience liveness probe that internally dispatches `platform.health`.
    - No multi-route REST aliases (`GET /workloads`, `POST /operations/deploy`, etc.) are exposed in P4, eliminating URL-vs-body ambiguity.
 3. **Bounded Non-Streaming Logs**: `workload.logs` is strictly non-streaming in P4 (`tail: StrictInt` bounded `1..1000`, default `100`). Live streaming (`--follow` / SSE) is deferred to Milestone P7.

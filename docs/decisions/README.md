@@ -2,7 +2,7 @@
 
 This document serves as the authoritative repository index for Architectural Decision Records (ADRs) governing **Homelab Core** and the **`appctl` Operational Control Plane**.
 
-Repository-level architectural decisions are recorded in `docs/decisions/` using the MADR 4.0 specification. Foundational platform ADRs (0001 and 0002) are summarized inline below alongside full MADR records (0003+).
+Repository-level architectural decisions are recorded in `docs/decisions/` using the MADR 4.0 specification (`NNNN-slug.md`).
 
 ---
 
@@ -11,15 +11,14 @@ Repository-level architectural decisions are recorded in `docs/decisions/` using
 | Decision Record | Status | Date | Scope & One-Line Purpose |
 | :--- | :--- | :--- | :--- |
 | [**ADR-0003: Centralized Runtime Validation & Serialization via Pydantic v2**](0003-pydantic-v2-runtime-validation.md) | `accepted` | 2026-10-15 | Adopts Pydantic v2 as the single runtime schema and validation authority across workload manifests and daemon API to enforce fail-closed type safety, strict schema-based boundaries, and secret-safe serialization. |
-| [**ADR-0002: Homelab Operational Control Plane & Deployment Model Architecture**](#homelab-operational-control-plane--deployment-model-architecture) | `accepted` | 2026-10-07 | Establishes `appctl` as the central operational control plane daemon, one logical API across dual transports (Unix socket and HTTP), explicit token authentication on host, Git as authoritative deployment state, the 5-stage model lifecycle, AI proposal boundaries, and append-only audit telemetry. |
-| [**ADR-0001: Homelab 3-Tier Architecture & Deployment Provenance Model**](#homelab-3-tier-architecture--deployment-provenance-model) | `accepted` | 2026-09-28 | Establishes 3-tier separation (Software, OCI Artifact, Sites Deployment, Core Platform), two workload classes (Source-Backed vs. Image-Only), isolated state root (`~/var/lib/homelab/<app>/`), and two operational inspection axes. |
-
+| [**ADR-0002: Homelab Operational Control Plane & Deployment Model Architecture**](0002-appctl-control-plane-architecture.md) | `accepted` | 2026-10-07 | Establishes `homelab-appctl.service` as the central operational control plane daemon, one logical command API (`POST /v1/operations`) across dual transports (UDS and HTTP), mandatory token auth with UDS `SO_PEERCRED` viewer fallback, dedicated service isolation, fail-closed audit logging, GitOps worker unification, and the 5-stage `DeploymentModel` lifecycle. |
+| [**ADR-0001: Homelab 3-Tier Architecture & Deployment Provenance Model**](0001-3tier-architecture-and-provenance.md) | `accepted` | 2026-09-28 | Establishes 3-tier separation (Software, OCI Artifact, Sites Deployment, Core Platform), two workload classes (Source-Backed vs. Image-Only), isolated state root (`~/var/lib/homelab/<app>/`), and two operational inspection axes. |
 
 ---
 
 ## 🧭 Summaries of Governing Decisions
 
-### Centralized Runtime Validation & Serialization via Pydantic v2
+### [ADR-0003: Centralized Runtime Validation & Serialization via Pydantic v2](0003-pydantic-v2-runtime-validation.md)
 * **Canonical Document**: [`0003-pydantic-v2-runtime-validation.md`](0003-pydantic-v2-runtime-validation.md)
 * **Status**: `accepted` (Active)
 * **Governing Implementation Plan**: [ROADMAP.md](../../ROADMAP.md) (Milestone P4)
@@ -30,27 +29,21 @@ Repository-level architectural decisions are recorded in `docs/decisions/` using
   4. **Secret-Safe Error Transformation**: Transport-level conversion of `ValidationError` into standard `ERR_VALIDATION_FAILED` (400) with raw input values redacted.
   5. **Dual-Transport Parity**: Identical validated models across Unix domain socket and HTTP transports.
 
-### Homelab Operational Control Plane & Deployment Model Architecture
-
-* **Decision ID**: `ADR-0002`
-* **Status**: `accepted` (Active)
-* **Governing Implementation Plan**: [ROADMAP.md](../../ROADMAP.md) (Roadmap v5)
+### [ADR-0002: Homelab Operational Control Plane & Deployment Model Architecture](0002-appctl-control-plane-architecture.md)
+* **Canonical Document**: [`0002-appctl-control-plane-architecture.md`](0002-appctl-control-plane-architecture.md)
+* **Status**: `accepted` (Active — Reconciled with Pre-P4 Locked Decisions `DEC-01`–`DEC-05`)
+* **Governing Implementation Plan**: [ROADMAP.md](../../ROADMAP.md) (Roadmap v6)
 * **Core Commitments**:
-  1. **Control Plane Daemon**: `appctl` transitions from a collection of local shell scripts into the authoritative platform service (`homelab-appctl.service`).
-  2. **One Logical API Across Dual Transports**: Command-oriented operations exposed over a Unix domain socket (`/run/homelab/appctl.sock`) on host and an HTTP listener for network clients.
-  3. **Explicit Token Authentication Everywhere**: Host SSH access does not confer appctl authority; every mutating operation requires an explicit, authenticated user-scoped token.
-  4. **Git as Authoritative Deployment State**: Approved `DeploymentModels` are committed to Git. `appctl` acts as the reconciliation engine, validating the model, materializing platform descriptors (`app.yaml` + Compose), and reconciling running containers.
-  5. **Five-Stage Deployment Model Lifecycle**: Separates factual `ApplicationProfile`, candidate `DeploymentProposal`, validated `DeploymentModel` (in Git), materialized `Deployment Definition`, and runtime `Reconciliation`.
-  6. **AI Proposal Boundary**: AI agents act strictly as proposal generators with zero mutation or execution authority. After human approval into a `DeploymentModel`, the AI is completely out of the loop.
-  7. **Secret Reference Invariant**: Manifests contain secret references (`secretKeyRef`), never secret material, resolved at runtime via `SecretProvider`.
-  8. **Append-Only Audit Log**: Audit entries capture `principal`, `action`, `target`, `transport`, `origin`, `client`, `timestamp`, and `result`.
+  1. **One Logical Command API Across Dual Transports (`DEC-01`)**: `homelab-appctl.service` exposes `POST /v1/operations` (13 canonical domain operations) and `GET /v1/health` over HTTP/1.1 on `/run/homelab/appctl.sock` and `127.0.0.1:9001`.
+  2. **Host Access Does Not Confer Mutation Authority (`DEC-02`)**: Every mutating operation and sensitive read (`workload.config`, `workload.logs`) requires an authenticated SHA-256 Bearer token (`/run/secrets/appctl/tokens.json`); tokenless UDS calls fall back via `SO_PEERCRED` strictly to `homelab-viewer` read-only inspection.
+  3. **Dedicated Service Identity & Fail-Closed Audit Guard (`DEC-03`)**: Daemon executes as `homelab-appctl:homelab-operators` with mode `0600` append-only `/var/log/homelab/appctl/audit.jsonl` and a pre-execution `DISPATCHED` disk guard.
+  4. **GitOps Worker Unification & Pure-Python Pre-Flight (`DEC-04`, `DEC-05`)**: `gitops_dispatcher.py` worker delegates `workload.update` to the daemon; shell `source`/`eval` are replaced with pure-Python `.env` parsing and mandatory `validate_compose_security()` pre-flight checks.
+  5. **Git Truth, Five-Stage Deployment Model & AI Boundary (P5–P7)**: Git remains authoritative deployment state; separates `ApplicationProfile` $\to$ `DeploymentProposal` (AI) $\to$ `DeploymentModel` (human-approved in Git) $\to$ materialized descriptors; resolves workload secrets via `SecretProvider` (`secretKeyRef`).
 
----
-
-### Homelab 3-Tier Architecture & Deployment Provenance Model
-* **Decision ID**: `ADR-0001`
+### [ADR-0001: Homelab 3-Tier Architecture & Deployment Provenance Model](0001-3tier-architecture-and-provenance.md)
+* **Canonical Document**: [`0001-3tier-architecture-and-provenance.md`](0001-3tier-architecture-and-provenance.md)
 * **Status**: `accepted` (Active)
-* **Governing Implementation Plan**: [ROADMAP.md](../../ROADMAP.md) (Roadmap v5)
+* **Governing Implementation Plan**: [ROADMAP.md](../../ROADMAP.md) (Roadmap v6)
 * **Core Commitments**:
   1. **3-Tier Separation of Concerns**:
      * *Tier 1 (Software Layer)*: Upstream application repositories owning code, tests, and CI. Zero Homelab infrastructure coupling.
@@ -67,9 +60,10 @@ Repository-level architectural decisions are recorded in `docs/decisions/` using
 
 ## 📜 Superseded Historical Decisions & Lineage
 
-The following historical plans and design iterations have been formally superseded by the active ADRs and Roadmap v5:
+The following historical plans and design iterations have been formally superseded by the active ADRs and Roadmap v6:
 
-* **Roadmap v4 & v3** (`architecture-consolidation-roadmap-v4.md`): Superseded by Roadmap v5.
-* **appctl-v2 Modernization Plan** (`appctl-engine-v2-refactoring.md`): Scaffolded and absorbed into Roadmap v5 Phases P0 and P3.
-* **Smart Selective Deployment Pipeline Plan** (`smart-deployment-pipeline.md`): Absorbed into Roadmap v5 Phase P4 control-plane reconciliation.
-* **Architecture Implementation Guide v3** (`architecture-consolidation-implementation-guide-v3.md`): Superseded by Roadmap v5.
+* **Roadmap v5 (`architecture-consolidation-roadmap-v5.md`)**: Superseded by Roadmap v6 (`DEC-01`–`DEC-05` pre-P4 boundary lock).
+* **Roadmap v4, v3, v2 & v1** (`architecture-consolidation-roadmap-v4.md`): Superseded by Roadmap v5/v6.
+* **appctl-v2 Modernization Plan** (`appctl-engine-v2-refactoring.md`): Scaffolded and absorbed into Roadmap Phases P0 and P3.
+* **Smart Selective Deployment Pipeline Plan** (`smart-deployment-pipeline.md`): Absorbed into Phase P4 control-plane reconciliation.
+* **Architecture Implementation Guide v3 & v2** (`architecture-consolidation-implementation-guide-v3.md`): Superseded by unified Roadmap v4–v6.
