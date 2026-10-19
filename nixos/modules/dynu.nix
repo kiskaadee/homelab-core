@@ -15,7 +15,7 @@ in
   sops.secrets."dynu/domain" = { };
   sops.secrets."dynu/password" = { };
   sops.secrets."system/pdf_decrypt_password" = {
-    owner = "kiskaadee";
+    owner = config.homelab.operatorUser;
   };
 
   # Assemble the ddclient config file securely at boot time in /run/secrets/

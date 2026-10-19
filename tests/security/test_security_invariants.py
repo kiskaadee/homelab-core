@@ -180,13 +180,20 @@ exit 0
 def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests():
     """Ensure personal domains and operator usernames are absent from scripts, tests, and documentation."""
     forbidden = ["roadtotech.me", "kiskaadee"]
-    root_dirs = [CORE_ROOT / "scripts", CORE_ROOT / "tests", CORE_ROOT / "docs"]
+    root_dirs = [
+        CORE_ROOT / "scripts",
+        CORE_ROOT / "tests",
+        CORE_ROOT / "docs",
+        CORE_ROOT / "nixos" / "modules",
+        CORE_ROOT / "config",
+    ]
     root_files = [
         CORE_ROOT / "README.md",
         CORE_ROOT / "ROADMAP.md",
         CORE_ROOT / "AGENTS.md",
         CORE_ROOT / "SECURITY.md",
         CORE_ROOT / "flake.nix",
+        CORE_ROOT / "docker-compose.yml",
     ]
     violations = []
 

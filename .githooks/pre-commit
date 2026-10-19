@@ -21,7 +21,17 @@ else
     echo "⚠️  [pre-commit] Neither ruff nor nix found; skipping ruff"
 fi
 
-# 2. Run Pytest Suite
+# 2. Run Pyright Type Checker
+echo "  ↳ Checking static types with Pyright..."
+if command -v pyright >/dev/null 2>&1; then
+    pyright
+elif command -v nix >/dev/null 2>&1 && [ -f flake.nix ]; then
+    nix develop --command pyright
+else
+    echo "⚠️  [pre-commit] Neither pyright nor nix found; skipping pyright"
+fi
+
+# 3. Run Pytest Suite
 echo "  ↳ Running structural and security test suite with Pytest..."
 if [ -x ".venv/bin/pytest" ]; then
     .venv/bin/pytest tests/

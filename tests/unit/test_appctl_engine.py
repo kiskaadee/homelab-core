@@ -83,7 +83,7 @@ def test_manifest_data_overrides_default_values(app_factory: AppFactory):
         dir_name="homelab-custom",
         manifest_yaml="""
         name: custom-app
-        domain: custom.roadtotech.local
+        domain: custom.example.test
         auth: false
         visible: false
         networks:
@@ -95,7 +95,7 @@ def test_manifest_data_overrides_default_values(app_factory: AppFactory):
     app = engine.resolve_app("custom-app", apps)
 
     assert app is not None
-    assert app.domain == "custom.roadtotech.local"
+    assert app.domain == "custom.example.test"
     assert app.auth is False
     assert app.networks == ["custom-net"]
 

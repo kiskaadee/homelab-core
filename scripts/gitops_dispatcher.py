@@ -285,7 +285,11 @@ def get_trusted_repository_mapping() -> dict[str, Path]:
                 raw_path = entry.get("path")
                 if not raw_path:
                     continue
-                p = Path(raw_path).expanduser().resolve()
+                if raw_path.startswith("~/Sites/") or raw_path == "~/Sites":
+                    sub = raw_path[len("~/Sites"):].lstrip("/")
+                    p = (SITES_DIR / sub).resolve() if sub else SITES_DIR.resolve()
+                else:
+                    p = Path(raw_path).expanduser().resolve()
                 # Enforce strict containment strictly inside SITES_DIR
                 if SITES_DIR.is_dir() and p.is_relative_to(SITES_DIR.resolve()):
                     mapping[reg_name] = p

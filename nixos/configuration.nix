@@ -1,5 +1,5 @@
 # 🌐 Server NixOS Configuration — Turnkey Headless Homelab Appliance
-# Standalone declarative configuration for the roadtotech.me homelab server.
+# Standalone declarative configuration for the homelab server.
 # No Home Manager. No shared desktop modules.
 # Goal: wipe & restore from any NixOS installation via `nixos-install --flake ~/Core#server`
 
@@ -13,6 +13,9 @@
     ./modules/dynu.nix                # Dynu DDNS smart IP monitor service
     ./modules/shell.nix               # Declarative bash environment for the server
   ];
+
+  # ── Homelab platform settings ────────────────────────────────────────────────
+  homelab.operatorUser = "kiskaadee";
 
   # ── SOPS secrets configuration ──────────────────────────────────────────────
   # Set once here to avoid duplicate-option conflicts across submodules

@@ -106,11 +106,11 @@ services:
     environment:
       - TZ=America/Bogota
       - LLDAP_HTTP_URL=https://users.${DOMAIN}
-      - LLDAP_LDAP_BASE_DN=dc=roadtotech,dc=me
+      - LLDAP_LDAP_BASE_DN=${LLDAP_LDAP_BASE_DN:-dc=example,dc=test}
       - LLDAP_JWT_SECRET=${LLDAP_JWT_SECRET}
       - LLDAP_KEY_SEED=${LLDAP_KEY_SEED}
       - LLDAP_LDAP_USER_PASS=${LLDAP_LDAP_USER_PASS}
-      - LLDAP_LDAP_USER_EMAIL=admin@${DOMAIN:-roadtotech.me}
+      - LLDAP_LDAP_USER_EMAIL=${LLDAP_ADMIN_EMAIL:-admin@${DOMAIN:-example.test}}
       - LLDAP_DATABASE_URL=sqlite:///data/users.db?mode=rwc
     volumes:
       - ./config/lldap/data:/data
@@ -222,12 +222,12 @@ services:
       - DIUN_PROVIDERS_DOCKER_APIVERSION=${DOCKER_API_VERSION:-1.40}
       - DIUN_NOTIF_MAIL_HOST=stalwart
       - DIUN_NOTIF_MAIL_PORT=465
-      - DIUN_NOTIF_MAIL_USERNAME=notifier@${DOMAIN:-roadtotech.me}
+      - DIUN_NOTIF_MAIL_USERNAME=${DIUN_NOTIF_MAIL_USERNAME:-notifier@${DOMAIN:-example.test}}
       - DIUN_NOTIF_MAIL_PASSWORD=${DIUN_SMTP_PASSWORD}
       - DIUN_NOTIF_MAIL_SSL=true
       - DIUN_NOTIF_MAIL_INSECURESKIPVERIFY=true
-      - DIUN_NOTIF_MAIL_FROM=notifier@${DOMAIN:-roadtotech.me}
-      - DIUN_NOTIF_MAIL_TO=kiskaadee@${DOMAIN:-roadtotech.me}
+      - DIUN_NOTIF_MAIL_FROM=${DIUN_NOTIF_MAIL_FROM:-notifier@${DOMAIN:-example.test}}
+      - DIUN_NOTIF_MAIL_TO=${DIUN_NOTIF_MAIL_TO:-operator@${DOMAIN:-example.test}}
     volumes:
       - ./config/diun:/data
     networks:

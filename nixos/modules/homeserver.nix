@@ -4,8 +4,33 @@
 { config, lib, pkgs, ... }:
 
 {
-  # Define the keys to decrypt from secrets.yaml
-  sops.secrets = lib.genAttrs [
+  # Declarative configuration options for Homelab Core
+  options.homelab = {
+    domain = lib.mkOption {
+      type = lib.types.str;
+      default = "example.test";
+      description = "Canonical domain for homelab services";
+    };
+    operatorUser = lib.mkOption {
+      type = lib.types.str;
+      default = "operator";
+      description = "Primary operator user identity";
+    };
+    coreDir = lib.mkOption {
+      type = lib.types.str;
+      default = "/home/${config.homelab.operatorUser}/Core";
+      description = "Path to Homelab Core repository";
+    };
+    sitesDir = lib.mkOption {
+      type = lib.types.str;
+      default = "/home/${config.homelab.operatorUser}/Sites";
+      description = "Path to Sites directory";
+    };
+  };
+
+  config = {
+    # Define the keys to decrypt from secrets.yaml
+    sops.secrets = lib.genAttrs [
     "dynu/api_key"
     "traefik/acme_email"
     "authelia/session_secret"
@@ -18,13 +43,13 @@
     "brevo/smtp_login"
     "brevo/smtp_key"
     "diun/smtp_password"
-  ] (name: { owner = "kiskaadee"; });
+  ] (name: { owner = config.homelab.operatorUser; });
 
   # Generate the unified environment file at runtime in /run/secrets/homeserver.env
   sops.templates."homeserver.env" = {
-    owner = "kiskaadee";
+    owner = config.homelab.operatorUser;
     content = lib.generators.toKeyValue {} {
-      DOMAIN = "roadtotech.me";
+      DOMAIN = config.homelab.domain;
       DOCKER_API_VERSION = "1.40";
       DYNU_API_KEY = config.sops.placeholder."dynu/api_key";
       ACME_EMAIL = config.sops.placeholder."traefik/acme_email";
@@ -53,7 +78,7 @@
     serviceConfig = {
       Type = "oneshot";
       RemainAfterExit = true;
-      WorkingDirectory = "/home/kiskaadee/Core";
+      WorkingDirectory = config.homelab.coreDir;
       ExecStart = "${pkgs.docker-compose}/bin/docker-compose --env-file ${config.sops.templates."homeserver.env".path} up -d --remove-orphans";
       ExecStop = "${pkgs.docker-compose}/bin/docker-compose down";
     };
@@ -78,24 +103,24 @@
 
     environment = {
       GITOPS_SECRET_FILE = config.sops.secrets."gitops/webhook_secret".path;
-      DOCKER_CONFIG = "/home/kiskaadee/.local/state/homelab/docker";
+      DOCKER_CONFIG = "/home/${config.homelab.operatorUser}/.local/state/homelab/docker";
     };
 
     serviceConfig = {
       Type = "simple";
-      User = "kiskaadee";
+      User = config.homelab.operatorUser;
       SupplementaryGroups = [ "docker" ];
-      WorkingDirectory = "/home/kiskaadee/Core";
+      WorkingDirectory = config.homelab.coreDir;
       ExecStart = "${pkgs.webhook}/bin/webhook -hooks ${pkgs.writeText "hooks.json" (builtins.toJSON [
         {
           id = "deploy";
-          execute-command = "/home/kiskaadee/Core/scripts/gitops_dispatcher.py";
+          execute-command = "${config.homelab.coreDir}/scripts/gitops_dispatcher.py";
           pass-arguments-to-command = [
             { source = "raw-request-body"; }
             { source = "header"; name = "X-Gitea-Signature"; }
             { source = "header"; name = "X-Gitea-Event"; }
           ];
-          command-working-directory = "/home/kiskaadee/Core";
+          command-working-directory = config.homelab.coreDir;
           response-message = "Deployment payload dispatched successfully.";
         }
       ])} -port 9000 -verbose";
@@ -110,8 +135,8 @@
       ProtectKernelTunables = true;
       ProtectControlGroups = true;
       ReadWritePaths = [
-        "/home/kiskaadee/Sites"
-        "/home/kiskaadee/.local/state/homelab"
+        config.homelab.sitesDir
+        "/home/${config.homelab.operatorUser}/.local/state/homelab"
       ];
     };
   };
@@ -149,10 +174,10 @@
       APPCTL_AUDIT_LOG = "/var/log/homelab/appctl/audit.jsonl";
       APPCTL_LOCK_DIR = "/var/lib/homelab/appctl/locks";
       APPCTL_TOKENS_FILE = "/run/secrets/appctl/tokens.json";
-      SITES_DIR = "/home/kiskaadee/Sites";
-      CORE_DIR = "/home/kiskaadee/Core";
-      HOMELAB_CONFIG_DIR = "/home/kiskaadee/.config/homelab";
-      HOMELAB_DEPLOYMENTS_FILE = "/home/kiskaadee/Core/config/deployments.yaml";
+      SITES_DIR = config.homelab.sitesDir;
+      CORE_DIR = config.homelab.coreDir;
+      HOMELAB_CONFIG_DIR = "/home/${config.homelab.operatorUser}/.config/homelab";
+      HOMELAB_DEPLOYMENTS_FILE = "${config.homelab.coreDir}/config/deployments.yaml";
     };
 
     serviceConfig = {
@@ -160,8 +185,8 @@
       User = "homelab-appctl";
       Group = "homelab-operators";
       SupplementaryGroups = [ "docker" ];
-      WorkingDirectory = "/home/kiskaadee/Core";
-      ExecStart = "${(pkgs.python3.withPackages (ps: with ps; [ pyyaml pydantic ]))}/bin/python3 /home/kiskaadee/Core/scripts/appctl_daemon.py";
+      WorkingDirectory = config.homelab.coreDir;
+      ExecStart = "${(pkgs.python3.withPackages (ps: with ps; [ pyyaml pydantic ]))}/bin/python3 ${config.homelab.coreDir}/scripts/appctl_daemon.py";
       Restart = "always";
       RestartSec = "5s";
 
@@ -179,9 +204,9 @@
       ProtectKernelTunables = true;
       ProtectControlGroups = true;
       ReadWritePaths = [
-        "/home/kiskaadee/Sites"
-        "/home/kiskaadee/var/lib/homelab"
-        "/home/kiskaadee/Core/config/homepage"
+        config.homelab.sitesDir
+        "/home/${config.homelab.operatorUser}/var/lib/homelab"
+        "${config.homelab.coreDir}/config/homepage"
         "/var/log/homelab/appctl"
         "/var/lib/homelab/appctl"
         "/run/homelab"
@@ -191,19 +216,20 @@
 
   # Ensure persistent directories have proper permissions for container runtimes
   systemd.tmpfiles.rules = [
-    "d /home/kiskaadee/Core/config/stalwart/data 0777 kiskaadee users -"
-    "d /home/kiskaadee/Core/config/stalwart/etc 0777 kiskaadee users -"
-    "d /home/kiskaadee/Sites 0755 kiskaadee users -"
-    "d /home/kiskaadee/.local/state/homelab/gitops 0755 kiskaadee users -"
-    "d /home/kiskaadee/.local/state/homelab/docker 0755 kiskaadee users -"
+    "d ${config.homelab.coreDir}/config/stalwart/data 0777 ${config.homelab.operatorUser} users -"
+    "d ${config.homelab.coreDir}/config/stalwart/etc 0777 ${config.homelab.operatorUser} users -"
+    "d ${config.homelab.sitesDir} 0755 ${config.homelab.operatorUser} users -"
+    "d /home/${config.homelab.operatorUser}/.local/state/homelab/gitops 0755 ${config.homelab.operatorUser} users -"
+    "d /home/${config.homelab.operatorUser}/.local/state/homelab/docker 0755 ${config.homelab.operatorUser} users -"
     # POSIX ACLs granting homelab-appctl traverse and access to operator sites & homepage config
-    "a+ /home/kiskaadee - - - - u:homelab-appctl:x"
-    "a+ /home/kiskaadee/Core - - - - u:homelab-appctl:x"
-    "a+ /home/kiskaadee/Sites - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
-    "a+ /home/kiskaadee/var/lib/homelab - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
-    "a+ /home/kiskaadee/Core/config/homepage - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
+    "a+ /home/${config.homelab.operatorUser} - - - - u:homelab-appctl:x"
+    "a+ ${config.homelab.coreDir} - - - - u:homelab-appctl:x"
+    "a+ ${config.homelab.sitesDir} - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
+    "a+ /home/${config.homelab.operatorUser}/var/lib/homelab - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
+    "a+ ${config.homelab.coreDir}/config/homepage - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
   ];
 
-  # Open ports in the firewall for Traefik, Gitea SSH, GitOps Webhook Receiver, and Mail (SMTP, Submission, SMTPS, IMAPS, ManageSieve)
-  networking.firewall.allowedTCPPorts = [ 80 443 2223 9000 25 465 587 993 4190 ];
+    # Open ports in the firewall for Traefik, Gitea SSH, GitOps Webhook Receiver, and Mail (SMTP, Submission, SMTPS, IMAPS, ManageSieve)
+    networking.firewall.allowedTCPPorts = [ 80 443 2223 9000 25 465 587 993 4190 ];
+  };
 }
