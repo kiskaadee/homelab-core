@@ -30,20 +30,32 @@
 
   config = {
     # Define the keys to decrypt from secrets.yaml
-    sops.secrets = lib.genAttrs [
-    "dynu/api_key"
-    "traefik/acme_email"
-    "authelia/session_secret"
-    "authelia/storage_encryption_key"
-    "authelia/jwt_secret"
-    "lldap/jwt_secret"
-    "lldap/key_seed"
-    "lldap/admin_password"
-    "gitops/webhook_secret"
-    "brevo/smtp_login"
-    "brevo/smtp_key"
-    "diun/smtp_password"
-  ] (name: { owner = config.homelab.operatorUser; });
+    sops.secrets = (lib.genAttrs [
+      "dynu/api_key"
+      "traefik/acme_email"
+      "authelia/session_secret"
+      "authelia/storage_encryption_key"
+      "authelia/jwt_secret"
+      "lldap/jwt_secret"
+      "lldap/key_seed"
+      "lldap/admin_password"
+      "gitops/webhook_secret"
+      "brevo/smtp_login"
+      "brevo/smtp_key"
+      "diun/smtp_password"
+    ] (name: { owner = config.homelab.operatorUser; })) // {
+      "appctl/tokens_json" = {
+        owner = "homelab-appctl";
+        group = "homelab-operators";
+        mode = "0400";
+        path = "/run/secrets/appctl/tokens.json";
+      };
+      "gitops/appctl_token" = {
+        owner = config.homelab.operatorUser;
+        group = "homelab-operators";
+        mode = "0400";
+      };
+    };
 
   # Generate the unified environment file at runtime in /run/secrets/homeserver.env
   sops.templates."homeserver.env" = {
@@ -103,6 +115,7 @@
 
     environment = {
       GITOPS_SECRET_FILE = config.sops.secrets."gitops/webhook_secret".path;
+      GITOPS_APPCTL_TOKEN_FILE = config.sops.secrets."gitops/appctl_token".path;
       DOCKER_CONFIG = "/home/${config.homelab.operatorUser}/.local/state/homelab/docker";
     };
 
@@ -177,7 +190,7 @@
       APPCTL_HTTP_PORT = "9001";
       APPCTL_AUDIT_LOG = "/var/log/homelab/appctl/audit.jsonl";
       APPCTL_LOCK_DIR = "/var/lib/homelab/appctl/locks";
-      APPCTL_TOKENS_FILE = "/run/secrets/appctl/tokens.json";
+      APPCTL_TOKENS_FILE = config.sops.secrets."appctl/tokens_json".path;
       SITES_DIR = config.homelab.sitesDir;
       CORE_DIR = config.homelab.coreDir;
       HOMELAB_CONFIG_DIR = "/home/${config.homelab.operatorUser}/.config/homelab";
