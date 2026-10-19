@@ -75,7 +75,7 @@ RESERVED_ENV_KEYS = {
 }
 
 ALLOWED_STRATEGIES = {"compose"}
-ALLOWED_ACTIONS = {"git_pull", "compose_up", "compose_build", "compose_restart"}
+ALLOWED_ACTIONS = {"git_pull", "compose_pull", "compose_up", "compose_build", "compose_restart"}
 
 
 def validate_transport(url: str) -> tuple[TransportScheme, str]:

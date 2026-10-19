@@ -14,3 +14,9 @@ extraPaths = ["scripts"]
 venvPath = "."
 venv = ".venv"
 
+[tool.pytest.ini_options]
+# Automatically adds app modules and script hooks to the sys.venvPath
+pythonpath = [
+    ".",
+    "scripts"
+]
