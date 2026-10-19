@@ -24,15 +24,15 @@ It describes the implementation trajectory and phased engineering milestones for
 
 ## 🔍 Current Implementation Baseline vs. Target Architecture
 
-| Architectural Area | Current Implementation Baseline (Milestone P3) | Target Architecture (Roadmap v6) |
+| Architectural Area | Current Implementation Baseline (Milestone P4) | Target Architecture (Roadmap v6) |
 | :--- | :--- | :--- |
-| **`appctl` Architecture** | Bash CLI wrapper (`scripts/appctl`) driving local subprocesses (`docker compose`, `git`) and Python engine. | Dedicated daemon service (`homelab-appctl.service`, user `homelab-appctl`) exposing `POST /v1/operations` over Unix socket and HTTP. |
-| **Operational Auth** | Host Unix permissions; sourcing runtime secrets from `/run/secrets/`. | Mandatory SHA-256 Bearer token + 3-role RBAC + UDS `SO_PEERCRED` viewer fallback (P4); LLDAP directory RBAC & Authelia ForwardAuth (P5). |
-| **Metadata & Schema Engine** | Unified engine (`scripts/appctl_engine.py`) with two-axis provenance and fail-closed Pydantic v2 schema v1.0 parser (`scripts/core_manifest.py`). | Control-plane daemon validates requests via Pydantic v2 (`scripts/appctl_contracts.py`) and invokes `core_manifest.py` / `appctl_engine.py`. |
+| **`appctl` Architecture** | Dedicated daemon service (`homelab-appctl.service`, user `homelab-appctl`) exposing `POST /v1/operations` over Unix socket and loopback HTTP, with thin-client CLI (`scripts/appctl_cli.py`). | Expand with Operations UI and external ForwardAuth integration (P5–P7). |
+| **Operational Auth** | Mandatory SHA-256 Bearer token + 3-role RBAC + UDS `SO_PEERCRED` viewer fallback (`/run/secrets/appctl/tokens.json`). | LLDAP directory RBAC & Authelia ForwardAuth (P5). |
+| **Metadata & Schema Engine** | Control-plane daemon validates requests via Pydantic v2 (`scripts/appctl_contracts.py`) and invokes `core_manifest.py` / `appctl_engine.py`. | Unified across `DeploymentModel` materialization (P6). |
 | **Deployment Model** | Direct authoring of `app.yaml` and `docker-compose.yml` in `~/Sites/<app>/`. | 5-stage lifecycle (planned in P6): `DeploymentProposal` $\to$ operator-approved `DeploymentModel` in Git $\to$ `appctl` materialization. |
-| **GitOps Engine** | Webhook dispatcher (`scripts/gitops_dispatcher.py`) with HMAC-SHA256 auth, Compose AST security validator, and `flock` serialization. | Ingress/queue in `gitops_dispatcher.py`; worker delegates `workload.update` to daemon over `/run/homelab/appctl.sock`. |
+| **GitOps Engine** | Ingress/queue in `gitops_dispatcher.py`; worker delegates `workload.update` to daemon over `/run/homelab/appctl.sock`. | Integrated with `DeploymentModel` reconciliation (P6). |
 | **Secret Distribution** | Age-encrypted `nixos/secrets.yaml` decrypted by `sops-nix` to tmpfs `/run/secrets/`. | Host secrets remain in `sops-nix`; workload secrets referenced by key and projected via `SecretProvider` (planned in P5). |
-| **Dashboard** | `appctl sync` compiles `config/homepage/services.yaml` from `app.yaml` manifests. | Homepage consumes read-only live status from `appctl`; dedicated Operations UI client for management (planned in P7). |
+| **Dashboard** | `appctl sync` compiles `config/homepage/services.yaml` from `app.yaml` manifests under `_homepage_sync.lock`. | Homepage consumes read-only live status from `appctl`; dedicated Operations UI client for management (planned in P7). |
 
 ---
 
@@ -44,8 +44,8 @@ It describes the implementation trajectory and phased engineering milestones for
 | **P1** | **Mail Topology Realignment** | Topology & State | ✅ **Completed** | Re-homed Stalwart to the dedicated `smtp.` subdomain; migrated SnappyMail to `~/Sites/snappymail` with zero data loss. |
 | **P2** | **GitOps Hardening** | Ingress Security | ✅ **Completed** | Authoritative Core repository registry (`deployments.yaml`), Compose AST security validator, systemd sandboxing. |
 | **P3** | **Manifest Contract** | Domain Engine | ✅ **Completed** | Schema v1.0 with Pydantic v2 fail-closed models (`core_manifest.py`), two-axis status inspection, unified `appctl_engine.py`. |
-| **P4** | **Control Plane Daemon** | API & Dispatch | 🎯 **Current / Up Next** | `homelab-appctl.service` daemon, dual transports (socket + HTTP), mandatory auth admission gate, thin-client CLI, append-only audit log. |
-| **P5** | **Identity & Secrets** | Auth & Providers | ⏳ **Planned** | LLDAP RBAC group mapping, Authelia ForwardAuth header integration, user-scoped token lifecycle, `SecretProvider` reference resolution. |
+| **P4** | **Control Plane Daemon** | API & Dispatch | ✅ **Completed** | `homelab-appctl.service` daemon, dual transports (socket + HTTP), mandatory auth admission gate, thin-client CLI, append-only audit log. |
+| **P5** | **Identity & Secrets** | Auth & Providers | 🎯 **Current / Up Next** | LLDAP RBAC group mapping, Authelia ForwardAuth header integration, user-scoped token lifecycle, `SecretProvider` reference resolution. |
 | **P6** | **Deployment Model & AI**| Intent Authoring | ⏳ **Planned** | Capability catalog, `DeploymentProposal` $\to$ `DeploymentModel` compiler, Git commit pipeline. |
 | **P7** | **Operations UI & Portal** | Client Integration | ⏳ **Planned** | Dedicated Operations UI client, Homepage read-only status integration widgets. |
 
@@ -99,7 +99,7 @@ It describes the implementation trajectory and phased engineering milestones for
 ---
 
 ### Milestone P4: Appctl Control Plane Daemon & Command-Oriented API
-**Status**: 🎯 **Current / Up Next**
+**Status**: ✅ **Completed**
 * **Objective**: Evolve `appctl` from a collection of local shell scripts into the authoritative platform daemon while enforcing authorization gates from day one.
 * **Key Deliverables**:
   1. *Daemon Service (`homelab-appctl.service`)*: Systemd daemon running as dedicated user `homelab-appctl` (`Group = "homelab-operators"`), exposing one logical HTTP/1.1 API across dual transports: Unix domain socket (`/run/homelab/appctl.sock`) on host and loopback HTTP listener (`127.0.0.1:9001`).

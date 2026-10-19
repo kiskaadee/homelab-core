@@ -106,7 +106,7 @@ Before executing `docker compose up -d`, `validate_compose_security()` parses th
 To avoid blocking HTTP connections and handle overlapping pushes:
 
 1. **Immediate HTTP 200 Return**: Upon passing admission, the dispatcher writes a pending file (`~/.local/state/homelab/gitops/<target>.pending.json`), spawns a detached worker (`--worker <target>`), and returns HTTP 200.
-2. **Per-Target `flock` Serialization**: The worker acquires an exclusive non-blocking `fcntl.flock` on `~/.local/state/homelab/gitops/<target>.lock`. If a worker is already running for this target, the second worker exits safely while the running worker continues to drain the pending file.
+2. **Per-Target `flock` Serialization & Daemon Delegation**: The worker acquires an exclusive non-blocking `fcntl.flock` on `~/.local/state/homelab/gitops/<target>.lock`. When `/run/homelab/appctl.sock` is available, the worker delegates `workload.update` to `homelab-appctl.service` over UDS authenticating with `/run/secrets/gitops/appctl_token` (`homelab-operator` role), which executes `git pull --ff-only`, re-validates `app.yaml` and Compose security, runs the declared actions, logs to `/var/log/homelab/appctl/audit.jsonl`, and syncs Homepage.
 3. **Commit Superseding**:
    - Commit A begins deploying.
    - Commit B arrives and is written to the pending file.

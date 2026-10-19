@@ -3,8 +3,8 @@
 This document details the architectural structure, component roles, networking models, and security controls of the **Homelab Core** platform.
 
 > [!NOTE]
-> **Implementation Scope**: This document details the **current runtime architecture (Milestone P3)**, edge routing, container topologies, and network isolation models of Homelab Core.
-> For the planned Milestone P4 control-plane daemon transition and phased engineering milestones, see [`ROADMAP.md`](../ROADMAP.md) and the [Architecture Decision Index](decisions/README.md).
+> **Implementation Scope**: This document details the **current runtime architecture (Milestone P4)**, operational control plane daemon (`homelab-appctl.service`), edge routing, container topologies, and network isolation models of Homelab Core.
+> For phased engineering milestones (P5–P7), see [`ROADMAP.md`](../ROADMAP.md) and the [Architecture Decision Index](decisions/README.md).
 
 ---
 
@@ -42,16 +42,17 @@ The runtime environment consists of four functional layers:
                                     │
                                     ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│ 4. HOST FOUNDATION                                                     │
+│ 4. HOST FOUNDATION & CONTROL PLANE DAEMONS                             │
 │    NixOS Linux · sops-nix Secrets · Docker Engine · Systemd Units      │
+│    homelab-appctl.service (Control Plane Daemon) · homelab-gitops      │
 │    Smart Dynu DDNS Monitor · Host Firewall · /run Secret Projections   │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### C. Cross-Cutting Orchestration
 Orchestration coordinates operations across the runtime layers:
-* **`appctl` CLI, Provenance Engine & Schema Parser (`scripts/appctl`, `scripts/appctl_engine.py`, `scripts/core_manifest.py`)**: Current CLI implementation coordinating workload discovery, fail-closed Pydantic v2 `app.yaml` validation, two-axis provenance inspection, and Homepage compilation across workloads and Core. Under Milestone P4, this transitions into the centralized operational control plane daemon (`homelab-appctl.service`).
-* **GitOps Webhook Dispatcher (`scripts/gitops_dispatcher.py`)**: Governed by the `homelab-gitops.service` systemd unit, it receives webhooks on port 9000, verifies HMAC-SHA256 signatures, enforces the `config/deployments.yaml` allowlist and Compose AST security checks, and dispatches serialized deployment actions for `~/Sites` workloads.
+* **`appctl` Operational Control Plane Daemon (`homelab-appctl.service`, `scripts/appctl_daemon.py`, `scripts/appctl_router.py`)**: Centralized control plane running under isolated service identity `homelab-appctl:homelab-operators`. Exposes `POST /v1/operations` and `GET /v1/health` over `/run/homelab/appctl.sock` (mode `0660`) and `127.0.0.1:9001`, enforcing SHA-256 Bearer token authentication, 3-role RBAC (`homelab-admin`, `homelab-operator`, `homelab-viewer`), per-target `flock` serialization, fail-closed append-only audit logging (`/var/log/homelab/appctl/audit.jsonl`), Pydantic v2 `app.yaml` validation, Compose AST security checks, and pure-Python `.env` assembly.
+* **GitOps Webhook Dispatcher (`scripts/gitops_dispatcher.py`)**: Governed by the `homelab-gitops.service` systemd unit, it receives webhooks on port 9000, verifies HMAC-SHA256 signatures, enforces the `config/deployments.yaml` allowlist, and delegates serialized `workload.update` execution to `homelab-appctl.service` over `/run/homelab/appctl.sock` using its `homelab-operator` Bearer token.
 
 ---
 
@@ -91,7 +92,8 @@ Orchestration coordinates operations across the runtime layers:
 
 ### F. Host Foundation & Daemons
 * **`homeserver-core.service`**: Systemd unit managing the Core Docker Compose stack (`~/Core/docker-compose.yml`) using secrets projected to `/run/secrets/homeserver.env`.
-* **`homelab-gitops.service`**: Systemd unit listening on port 9000 executing `scripts/gitops_dispatcher.py` under strict systemd sandboxing (`ProtectSystem=strict`, `ProtectHome=read-only`).
+* **`homelab-appctl.service`**: Operational control plane daemon running as dedicated user `homelab-appctl:homelab-operators` with dual listeners (`/run/homelab/appctl.sock` and `127.0.0.1:9001`), fail-closed audit logging (`/var/log/homelab/appctl/audit.jsonl`), and strict systemd sandboxing (`ProtectSystem=strict`, `ProtectHome=read-only`).
+* **`homelab-gitops.service`**: Systemd unit listening on port 9000 executing `scripts/gitops_dispatcher.py` under strict systemd sandboxing (`ProtectSystem=strict`, `ProtectHome=read-only`), delegating worker deployments to `homelab-appctl.service`.
 * **`dynu-monitor.service` & `dynu-monitor.timer`**: IP change monitor executing `nixos/scripts/monitor.py` every 30 minutes to detect WAN IP changes and update DNS via `ddclient`.
 
 ---

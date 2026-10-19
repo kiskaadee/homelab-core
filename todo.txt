@@ -30,3 +30,8 @@ x 2026-10-19 (B) Implement dual-transport HTTP/1.1 daemon (UDS + loopback TCP) a
 x 2026-10-19 (B) Add comprehensive unit and security test suite for P4 contracts, RBAC, audit guard, concurrency, and dual-transport parity in tests/unit/test_appctl_daemon.py +test @p4
 x 2026-10-19 (C) Re-implement scripts/appctl as a thin UDS HTTP client and declare homelab-appctl.service with POSIX ACLs in nixos/modules/homeserver.nix +cli @p4
 x 2026-10-19 (C) Scrub remaining hardcoded domain and username literals across NixOS modules, Compose stack, and config/deployments.yaml and add pyright to flake.nix checks +generic @core
+x 2026-10-19 (A) Enable Core platform stack and core_service container-scoped dispatch in OperationalRouter in scripts/appctl_router.py +router @p4
+x 2026-10-19 (A) Restore human-readable tabular output, list filter parameters, and bash autocompletion fast-path in scripts/appctl_cli.py and scripts/appctl +cli @p4
+x 2026-10-19 (A) Add operatorUser to homelab-operators group and configure daemon systemd sandbox HOME and DOCKER_CONFIG in nixos/modules/homeserver.nix +nixos @p4
+x 2026-10-19 (A) Provision SOPS appctl/tokens_json and gitops/appctl_token secrets and wire GITOPS_APPCTL_TOKEN_FILE in nixos/secrets.yaml and nixos/modules/homeserver.nix +secrets @p4
+x 2026-10-19 (B) Reconcile operational documentation and ROADMAP.md with Milestone P4 control plane daemon architecture +docs @p4

@@ -3,47 +3,48 @@
 The `appctl` tool is the command-line orchestrator and metadata engine for the **Homelab Core** platform. It coordinates interactions between independent workload repositories in `~/Sites` and platform services in `~/Core`.
 
 > [!NOTE]
-> **Implementation Reference**: This document serves as the **current implementation manual (Milestone P3)** for the `appctl` Bash CLI wrapper (`scripts/appctl`), metadata/provenance engine (`scripts/appctl_engine.py`), and Pydantic v2 manifest parser (`scripts/core_manifest.py`).
-> For the platform's planned Milestone P4 control-plane daemon transition and phased engineering roadmap, see [`ROADMAP.md`](../ROADMAP.md) and the [Architecture Decision Index](decisions/README.md).
+> **Implementation Reference**: This document serves as the **current implementation manual (Milestone P4)** for the `appctl` Operational Control Plane Daemon (`scripts/appctl_daemon.py`), Operational Router (`scripts/appctl_router.py`), Thin-Client CLI (`scripts/appctl`, `scripts/appctl_cli.py`), metadata/provenance engine (`scripts/appctl_engine.py`), and Pydantic v2 manifest parser (`scripts/core_manifest.py`).
+> For the platform's phased engineering roadmap, see [`ROADMAP.md`](../ROADMAP.md) and the [Architecture Decision Index](decisions/README.md).
 
 ---
 
 ## 1. How `appctl` Works
 
-`appctl` consists of three cooperating modules in `scripts/`:
-1. **[`scripts/appctl`](../scripts/appctl)** (Bash CLI wrapper): Parses CLI arguments, sources runtime secret templates, injects validated workload environment variables, dispatches `docker compose` commands, and provides shell autocompletions.
-2. **[`scripts/appctl_engine.py`](../scripts/appctl_engine.py)** (Discovery, Provenance & TLS Engine): Scans `~/Sites/*`, evaluates **two-axis status** (local deployment checkout state vs. upstream software provenance), inspects live container health and TLS certificates, and compiles the Homepage dashboard configuration.
-3. **[`scripts/core_manifest.py`](../scripts/core_manifest.py)** (Schema v1.0 Parser & Validator): Enforces fail-closed Pydantic v2 validation (`ConfigDict(extra="forbid")`) on `app.yaml` manifests, validates upstream Git transport schemes (`https://`, `ssh://`, `git@`), classifies reference mutability (branch, tag, commit SHA), and blocks reserved host environment keys (`PATH`, `LD_PRELOAD`, `IFS`, `CORE_DIR`, `SITES_DIR`, etc.).
+Under Milestone P4, `appctl` operates as a centralized operational control plane daemon (`homelab-appctl.service`, running as isolated user `homelab-appctl:homelab-operators`) backed by cooperating modules in `scripts/`:
+
+1. **[`scripts/appctl`](../scripts/appctl) & [`scripts/appctl_cli.py`](../scripts/appctl_cli.py)** (Thin-Client CLI): Dispatches operational commands over the Unix domain socket (`/run/homelab/appctl.sock`) using HTTP/1.1 (`POST /v1/operations`), resolves operator Bearer tokens (`--token`, `APPCTL_TOKEN`, `~/.config/homelab/token`), renders human-readable tables, and fast-paths local shell autocompletions (`complete`, `completion`, `resolve`).
+2. **[`scripts/appctl_daemon.py`](../scripts/appctl_daemon.py) & [`scripts/appctl_contracts.py`](../scripts/appctl_contracts.py)** (Dual-Transport Control Plane Server & Contracts): Serves a single logical HTTP/1.1 API (`POST /v1/operations` + `GET /v1/health`) identically across `/run/homelab/appctl.sock` (mode `0660`) and loopback TCP (`127.0.0.1:9001`), enforcing 64 KiB request caps and strict Pydantic v2 contracts (`ConfigDict(extra="forbid", strict=True)`).
+3. **[`scripts/appctl_auth.py`](../scripts/appctl_auth.py) & [`scripts/appctl_audit.py`](../scripts/appctl_audit.py)** (Zero-Trust Auth, 3-Role RBAC & Fail-Closed Audit Guard): Verifies SHA-256 Bearer tokens against `/run/secrets/appctl/tokens.json` (mode `0400`) using `hmac.compare_digest`, maps tokenless local UDS `SO_PEERCRED` callers strictly to `homelab-viewer` (non-sensitive read-only inspection), enforces `homelab-admin` / `homelab-operator` / `homelab-viewer` RBAC, serializes mutations via per-target `fcntl.flock`, and writes append-only audit records to `/var/log/homelab/appctl/audit.jsonl` (mode `0600`) before any mutation executes.
+4. **[`scripts/appctl_router.py`](../scripts/appctl_router.py)** (Operational Router & Unified Execution Engine): Enforces pre-flight path containment, `core_manifest.parse_manifest()`, and `validate_compose_security()` AST checks; assembles the 6-layer execution environment in pure Python (zero shell `source` or `eval`); and runs bounded `git` and `docker compose` subprocesses (`shell=False`, 256 KiB output cap, hard timeouts).
+5. **[`scripts/appctl_engine.py`](../scripts/appctl_engine.py) & [`scripts/core_manifest.py`](../scripts/core_manifest.py)** (Discovery, Provenance & Schema v1.0 Validator): Scans `~/Sites/*`, evaluates **two-axis status** (local deployment checkout state vs. upstream software provenance), inspects live container health and TLS certificates, validates `app.yaml` manifests, and atomically compiles the Homepage dashboard configuration under `_homepage_sync.lock`.
 
 ```text
-                  ┌───────────────────────────────┐
-                  │      appctl <command>         │
-                  └───────────────┬───────────────┘
-                                  │
-                                  ▼
-                    ┌───────────────────────────┐
-                    │     setup_app_env()       │
-                    └─────────────┬─────────────┘
-                                  │
-       ┌──────────────────────────┴──────────────────────────┐
-       ▼                                                     ▼
-[ appctl_engine.py resolve ]                          [ Source Secrets ]
-• Parses app.yaml via core_manifest.py                /run/secrets/traefik-deployments.env
-• Fails closed on manifest_error                      /run/secrets/homeserver.env
-       │                                                     │
-       └──────────────────────────┬──────────────────────────┘
-                                  ▼
-                   ┌─────────────────────────────┐
-                   │ Injected Compose Context    │
-                   │ • PROXY_NETWORK             │
-                   │ • SERVICE_DOMAIN / DOMAIN   │
-                   │ • CONTAINER_NAME            │
-                   │ • Validated manifest env    │
-                   └──────────────┬──────────────┘
-                                  ▼
-                   ┌─────────────────────────────┐
-                   │ docker compose <subcommand> │
-                   └─────────────────────────────┘
+      ┌──────────────────────────┐        ┌──────────────────────────┐
+      │   appctl <cmd> (CLI)     │        │  homelab-gitops.service  │
+      └────────────┬─────────────┘        └────────────┬─────────────┘
+                   │ UDS (/run/homelab/appctl.sock)    │ Bearer Token (homelab-operator)
+                   └─────────────────┬─────────────────┘
+                                     ▼
+            ┌────────────────────────────────────────────────┐
+            │   homelab-appctl.service (appctl_daemon.py)    │
+            │   • POST /v1/operations & GET /v1/health       │
+            │   • Auth: SHA-256 tokens.json + SO_PEERCRED    │
+            │   • RBAC: admin / operator / viewer            │
+            └────────────────────────┬───────────────────────┘
+                                     ▼
+            ┌────────────────────────────────────────────────┐
+            │      OperationalRouter (appctl_router.py)      │
+            │   • Per-target flock + Fail-closed DISPATCHED  │
+            │     audit write (/var/log/homelab/appctl/...)  │
+            │   • Pre-flight: parse_manifest() + Compose AST │
+            │   • Pure-Python 6-layer .env assembly          │
+            └────────────────────────┬───────────────────────┘
+                                     ▼
+            ┌────────────────────────────────────────────────┐
+            │   Bounded Subprocess Engine (shell=False)      │
+            │   • git status / pull --ff-only                │
+            │   • docker compose -f <file> <subcommand>      │
+            └────────────────────────────────────────────────┘
 ```
 
 ---
@@ -197,21 +198,21 @@ homepage:
 
 ## 4. Environment Injection & Resolution Precedence
 
-When `appctl` executes commands against a workload, environment variables are resolved in this sequence:
+When `OperationalRouter` (`scripts/appctl_router.py`) executes commands against a workload or Core stack, the 6-layer execution environment is assembled in memory using a pure-Python inert `KEY=VALUE` parser (`parse_dotenv`) with zero shell `source` or variable expansion:
 
-1. **Global Secrets & Templates**: Sourced from `/run/secrets/rendered/homeserver.env` and `/run/secrets/rendered/traefik-deployments.env` (with `/run/secrets/*` fallbacks).
-2. **Canonical Root Domain Lock**: `HOMELAB_DOMAIN` is locked at startup using precedence `HOMELAB_DOMAIN -> DOMAIN_SUFFIX -> DOMAIN` so per-workload `DOMAIN` exports cannot corrupt the platform apex domain.
-3. **Infrastructure Defaults**:
+1. **Base System Path & Docker Config**: `PATH` and `DOCKER_CONFIG`.
+2. **Global Secrets & Templates**: Parsed inertly from `/run/secrets/rendered/homeserver.env` and `/run/secrets/rendered/traefik-deployments.env` (with `/run/secrets/*` fallbacks).
+3. **Canonical Root Domain Lock**: `HOMELAB_DOMAIN` is locked using precedence `HOMELAB_DOMAIN -> DOMAIN_SUFFIX -> DOMAIN` (failing closed if unset).
+4. **Infrastructure Defaults & Application Identity**:
    - `PROXY_NETWORK` (defaults to `proxy-net`)
    - `CERT_RESOLVER` (defaults to `myresolver`)
-   - `DOMAIN_SUFFIX` (defaults to `$HOMELAB_DOMAIN`)
-4. **Application Identity**:
+   - `DOMAIN_SUFFIX` (`$HOMELAB_DOMAIN`)
    - `SERVICE_NAME` = `<canonical-name>`
    - `CONTAINER_NAME` = `<canonical-name>`
-   - `SERVICE_DOMAIN` = `<resolved-domain>`
-   - `DOMAIN` = `<resolved-domain>`
-5. **Manifest Variables**: Validated key-value pairs from the `env:` block in `app.yaml` (emitted via null-delimited stream without shell `eval`).
-6. **Local Repository Files**: Sourced from `$APP_DIR/.env` and `$APP_DIR/app.env` if present.
+   - `SERVICE_DOMAIN` = `<canonical-name>.<HOMELAB_DOMAIN>`
+   - `DOMAIN` = `<HOMELAB_DOMAIN>`
+5. **Manifest Variables**: Validated key-value pairs from the `env:` block in `app.yaml`.
+6. **Local Repository Files**: Parsed inertly from `$APP_DIR/.env` and `$APP_DIR/app.env` if present, rejecting any key violating `ENV_KEY_RE` or matching `RESERVED_ENV_KEYS`.
 
 ---
 
