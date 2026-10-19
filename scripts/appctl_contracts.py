@@ -16,6 +16,7 @@ from enum import StrEnum
 from typing import Annotated, Any, Literal
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     BeforeValidator,
     ConfigDict,
@@ -243,9 +244,14 @@ class OperationRequest(StrictModel):
     model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
 
     version: Literal["1.0"] = "1.0"
-    operation: FlexibleOperationType = Field(alias="action")
+    operation: FlexibleOperationType = Field(
+        validation_alias=AliasChoices("operation", "action")
+    )
     target: Annotated[StrictStr, Field(min_length=1)] | None = None
-    parameters: dict[str, Any] = Field(default_factory=dict, alias="params")
+    parameters: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("parameters", "params"),
+    )
 
     @property
     def action(self) -> OperationType:
@@ -285,7 +291,9 @@ class OperationResponse(StrictModel):
     success: StrictBool | None = None
     status: Literal["success", "error"] | None = None
     operation_id: StrictStr = Field(min_length=1)
-    operation: FlexibleOperationType = Field(alias="action")
+    operation: FlexibleOperationType = Field(
+        validation_alias=AliasChoices("operation", "action")
+    )
     target: StrictStr | None = None
     output: StrictStr = ""
     result: dict[str, Any] | None = None
