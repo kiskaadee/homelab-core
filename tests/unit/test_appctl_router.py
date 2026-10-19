@@ -509,3 +509,262 @@ def test_operational_router_workload_update_succeeds_on_clean_tree(
         # Verify git pull was called with expected branch
         pull_calls = [c for c in executed_commands if "pull" in c]
         assert len(pull_calls) == 2  # git pull and docker compose pull
+
+
+# ---------------------------------------------------------------------------
+# Core Platform Stack & Core Service Dispatch (Issue #2)
+# ---------------------------------------------------------------------------
+
+
+def test_operational_router_dispatches_core_stack_operations(
+    tmp_path: Path,
+    admin_principal: Principal,
+    mock_sites_dir: Path,
+    mock_core_dir: Path,
+):
+    compose_content = """
+services:
+  traefik:
+    image: "traefik:v3.6"
+    container_name: "traefik"
+  authelia:
+    image: "authelia/authelia:latest"
+    container_name: "authelia"
+"""
+    (mock_core_dir / "docker-compose.yml").write_text(compose_content.strip(), encoding="utf-8")
+
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_sites_dir,
+        core_dir=mock_core_dir,
+    )
+
+    executed_cmds: list[list[str]] = []
+
+    def mock_subproc(cmd: list[str], **kwargs):
+        executed_cmds.append(cmd)
+        return 0, "ok", ""
+
+    with (
+        patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc),
+        patch("appctl_router.cmd_sync_homepage") as mock_sync,
+    ):
+        # 1. Deploy core stack
+        resp_deploy = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.deploy", "target": "core"}),
+            admin_principal,
+        )
+        assert resp_deploy.success is True
+        assert executed_cmds[-1] == [
+            "docker",
+            "compose",
+            "-f",
+            str(mock_core_dir / "docker-compose.yml"),
+            "up",
+            "-d",
+            "--remove-orphans",
+        ]
+
+        # 2. Stop core stack (uses `down` for full stack)
+        resp_stop = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.stop", "target": "core"}),
+            admin_principal,
+        )
+        assert resp_stop.success is True
+        assert executed_cmds[-1] == [
+            "docker",
+            "compose",
+            "-f",
+            str(mock_core_dir / "docker-compose.yml"),
+            "down",
+        ]
+
+        # 3. Restart core stack
+        resp_restart = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.restart", "target": "core"}),
+            admin_principal,
+        )
+        assert resp_restart.success is True
+        assert executed_cmds[-1] == [
+            "docker",
+            "compose",
+            "-f",
+            str(mock_core_dir / "docker-compose.yml"),
+            "restart",
+        ]
+
+        # 4. Config core stack
+        resp_config = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.config", "target": "core"}),
+            admin_principal,
+        )
+        assert resp_config.success is True
+        assert executed_cmds[-1] == [
+            "docker",
+            "compose",
+            "-f",
+            str(mock_core_dir / "docker-compose.yml"),
+            "config",
+        ]
+
+        # Core operations do not trigger Homepage Sites sync
+        mock_sync.assert_not_called()
+
+
+def test_operational_router_dispatches_core_service_container_scoped_operations(
+    tmp_path: Path,
+    admin_principal: Principal,
+    mock_sites_dir: Path,
+    mock_core_dir: Path,
+):
+    (mock_core_dir / "docker-compose.yml").write_text(
+        "services:\n  traefik:\n    image: traefik:v3.6\n", encoding="utf-8"
+    )
+
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_sites_dir,
+        core_dir=mock_core_dir,
+    )
+
+    executed_cmds: list[list[str]] = []
+
+    def mock_subproc(cmd: list[str], **kwargs):
+        executed_cmds.append(cmd)
+        return 0, "ok", ""
+
+    with patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc):
+        # 1. Deploy single core service (traefik)
+        resp_deploy = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.deploy", "target": "traefik"}),
+            admin_principal,
+        )
+        assert resp_deploy.success is True
+        assert executed_cmds[-1][-1] == "traefik"
+        assert "up" in executed_cmds[-1]
+
+        # 2. Stop single core service (uses `stop traefik`, NOT `down`)
+        resp_stop = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.stop", "target": "traefik"}),
+            admin_principal,
+        )
+        assert resp_stop.success is True
+        assert executed_cmds[-1] == [
+            "docker",
+            "compose",
+            "-f",
+            str(mock_core_dir / "docker-compose.yml"),
+            "stop",
+            "traefik",
+        ]
+
+        # 3. Restart single core service
+        resp_restart = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.restart", "target": "traefik"}),
+            admin_principal,
+        )
+        assert resp_restart.success is True
+        assert executed_cmds[-1] == [
+            "docker",
+            "compose",
+            "-f",
+            str(mock_core_dir / "docker-compose.yml"),
+            "restart",
+            "traefik",
+        ]
+
+        # 4. Pull single core service
+        resp_pull = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.pull", "target": "traefik"}),
+            admin_principal,
+        )
+        assert resp_pull.success is True
+        assert executed_cmds[-2] == [
+            "docker",
+            "compose",
+            "-f",
+            str(mock_core_dir / "docker-compose.yml"),
+            "pull",
+            "traefik",
+        ]
+        assert executed_cmds[-1] == [
+            "docker",
+            "compose",
+            "-f",
+            str(mock_core_dir / "docker-compose.yml"),
+            "up",
+            "-d",
+            "--remove-orphans",
+            "traefik",
+        ]
+
+        # 5. Logs single core service
+        resp_logs = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.logs", "target": "traefik"}),
+            admin_principal,
+        )
+        assert resp_logs.success is True
+        assert executed_cmds[-1][-1] == "traefik"
+
+
+def test_operational_router_dispatches_core_update_without_manifest(
+    tmp_path: Path,
+    admin_principal: Principal,
+    mock_sites_dir: Path,
+    mock_core_dir: Path,
+):
+    (mock_core_dir / "docker-compose.yml").write_text(
+        "services:\n  traefik:\n    image: traefik:v3.6\n", encoding="utf-8"
+    )
+
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_sites_dir,
+        core_dir=mock_core_dir,
+    )
+
+    executed_cmds: list[list[str]] = []
+
+    def mock_subproc(cmd: list[str], **kwargs):
+        executed_cmds.append(cmd)
+        if "status" in cmd:
+            return 0, "", ""
+        if "rev-parse" in cmd:
+            return 0, "c0ffee1", ""
+        return 0, "ok", ""
+
+    with patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc):
+        resp = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.update", "target": "core"}),
+            admin_principal,
+        )
+        assert resp.success is True
+        assert resp.result is not None
+        assert resp.result["commit_sha"] == "c0ffee1"
+        assert resp.result["actions"] == ["compose_pull", "compose_up"]
+
+
+def test_operational_router_rejects_operator_role_on_core_targets(
+    tmp_path: Path,
+    operator_principal: Principal,
+    mock_sites_dir: Path,
+    mock_core_dir: Path,
+):
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_sites_dir,
+        core_dir=mock_core_dir,
+    )
+    for target in ("core", "traefik", "authelia"):
+        resp = router.dispatch(
+            OperationRequest.model_validate({"operation": "workload.restart", "target": target}),
+            operator_principal,
+        )
+        assert resp.success is False
+        assert resp.error is not None
+        assert resp.error.code == ErrorCode.ERR_PERMISSION_DENIED
+

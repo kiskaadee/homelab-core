@@ -347,6 +347,7 @@ def resolve_app(
     query: str,
     apps: list[SitesApp] | None = None,
     sites_dir: str | None = None,
+    core_dir: str | None = None,
 ) -> App | None:
     """
     Resolve a query string to a SitesApp or CoreService.
@@ -357,6 +358,7 @@ def resolve_app(
             sites_dir=sites_dir if sites_dir is not None else SITES_DIR
         )
 
+    c_dir = core_dir if core_dir is not None else CORE_DIR
     query_clean = query.strip().lower()
 
     # 1. Exact match on canonical name
@@ -380,7 +382,7 @@ def resolve_app(
             return app
 
     # 5. Match Core services
-    for svc in get_core_services():
+    for svc in get_core_services(core_dir=c_dir):
         if svc.name.lower() == query_clean:
             return svc
 
@@ -390,7 +392,7 @@ def resolve_app(
             domain=HOMELAB_DOMAIN,
             container="",
             description="Homelab Core Platform Stack",
-            dir_path=CORE_DIR,
+            dir_path=c_dir,
             app_type="core",
         )
 

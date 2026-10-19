@@ -248,6 +248,17 @@ def run_bounded_subprocess(
     return proc.returncode, stdout_str, stderr_str
 
 
+def _resolve_compose_file(app_dir: Path) -> Path:
+    """Resolve docker-compose.yml or docker-compose.yaml inside app_dir."""
+    yml = app_dir / "docker-compose.yml"
+    yaml_ext = app_dir / "docker-compose.yaml"
+    if yml.is_file():
+        return yml
+    if yaml_ext.is_file():
+        return yaml_ext
+    return yml
+
+
 def validate_workload_preflight(
     app_dir: Path,
     allowed_root: Path,
@@ -279,7 +290,7 @@ def validate_workload_preflight(
         raise RouterValidationError(f"Workload manifest validation failed: {err}") from err
 
     effective_name = app_name or manifest.name
-    compose_file = app_dir / "docker-compose.yml"
+    compose_file = _resolve_compose_file(app_dir)
     if compose_file.exists():
         ok, reason = validate_compose_security(
             compose_file=compose_file,
@@ -292,6 +303,34 @@ def validate_workload_preflight(
             )
 
     return manifest, compose_file
+
+
+def validate_core_preflight(
+    app_dir: Path,
+    core_dir: Path,
+) -> Path:
+    """
+    Enforce pre-flight gate for Core platform targets (core / core_service):
+    1. Target directory must resolve strictly to core_dir.
+    2. Core docker-compose.yml must exist as a regular file inside core_dir.
+    """
+    app_dir_resolved = app_dir.resolve()
+    core_dir_resolved = core_dir.resolve()
+    if app_dir_resolved != core_dir_resolved:
+        raise RouterValidationError(
+            f"Path traversal rejected: Core target directory '{app_dir}' does not match '{core_dir}'"
+        )
+
+    compose_file = _resolve_compose_file(app_dir)
+    if not compose_file.is_file():
+        raise RouterValidationError(f"Core compose file not found at '{compose_file}'")
+
+    if compose_file.is_symlink() and not compose_file.resolve().is_relative_to(core_dir_resolved):
+        raise RouterValidationError(
+            f"Core compose file symlink escapes Core root: '{compose_file}'"
+        )
+
+    return compose_file
 
 
 class OperationalRouter:
@@ -308,6 +347,37 @@ class OperationalRouter:
         self.lock_manager = lock_manager or TargetLockManager()
         self.sites_dir = Path(sites_dir or ENGINE_SITES_DIR)
         self.core_dir = Path(core_dir or ENGINE_CORE_DIR)
+
+    @staticmethod
+    def _is_core_target(app: Any) -> bool:
+        return getattr(app, "app_type", "app") in ("core", "core_service")
+
+    @staticmethod
+    def _target_container(app: Any) -> str:
+        if getattr(app, "app_type", "app") == "core_service":
+            container = getattr(app, "container", "")
+            return str(container).strip() if isinstance(container, str) else ""
+        return ""
+
+    def _prepare_target_context(
+        self, app: Any
+    ) -> tuple[Path, Manifest | None, Path, dict[str, str], str]:
+        """
+        Validate pre-flight boundaries and assemble environment for either a Core
+        target (core / core_service) or a Sites workload (app).
+        Returns (app_dir, manifest, compose_file, env, container_name).
+        """
+        app_dir = Path(app.dir_path)
+        if self._is_core_target(app):
+            compose_file = validate_core_preflight(app_dir, self.core_dir)
+            manifest = None
+        else:
+            manifest, compose_file = validate_workload_preflight(
+                app_dir, self.sites_dir, app.name
+            )
+        env = assemble_workload_env(app_dir, manifest, app.name)
+        container = self._target_container(app)
+        return app_dir, manifest, compose_file, env, container
 
     def dispatch(
         self,
@@ -375,7 +445,11 @@ class OperationalRouter:
                         message=f"Operation '{operation.value}' requires a non-empty target",
                     ),
                 )
-            resolved_app = resolve_app(target, sites_dir=str(self.sites_dir))
+            resolved_app = resolve_app(
+                target,
+                sites_dir=str(self.sites_dir),
+                core_dir=str(self.core_dir),
+            )
             if not resolved_app:
                 return OperationResponse(
                     version="1.0",
@@ -619,9 +693,7 @@ class OperationalRouter:
         }
 
     def _op_workload_config(self, app: Any, principal: Principal) -> dict[str, Any]:
-        app_dir = Path(app.dir_path)
-        manifest, compose_file = validate_workload_preflight(app_dir, self.sites_dir, app.name)
-        env = assemble_workload_env(app_dir, manifest, app.name)
+        app_dir, _, compose_file, env, _ = self._prepare_target_context(app)
 
         cmd = ["docker", "compose", "-f", str(compose_file), "config"]
         code, stdout, stderr = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=15.0)
@@ -638,9 +710,7 @@ class OperationalRouter:
     def _op_workload_logs(self, request: OperationRequest, app: Any) -> dict[str, Any]:
         params = request.parse_parameters()
         assert isinstance(params, LogsParams)
-        app_dir = Path(app.dir_path)
-        manifest, compose_file = validate_workload_preflight(app_dir, self.sites_dir, app.name)
-        env = assemble_workload_env(app_dir, manifest, app.name)
+        app_dir, _, compose_file, env, container = self._prepare_target_context(app)
 
         cmd = [
             "docker",
@@ -652,6 +722,9 @@ class OperationalRouter:
             "--tail",
             str(params.tail),
         ]
+        if container:
+            cmd.append(container)
+
         code, stdout, stderr = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=15.0)
         if code != 0:
             raise RouterExecutionError(f"docker compose logs failed: {stderr}", exit_code=code)
@@ -661,13 +734,14 @@ class OperationalRouter:
     def _op_workload_deploy(self, request: OperationRequest, app: Any) -> dict[str, Any]:
         params = request.parse_parameters()
         assert isinstance(params, DeployParams)
-        app_dir = Path(app.dir_path)
-        manifest, compose_file = validate_workload_preflight(app_dir, self.sites_dir, app.name)
-        env = assemble_workload_env(app_dir, manifest, app.name)
+        app_dir, _, compose_file, env, container = self._prepare_target_context(app)
+        is_core = self._is_core_target(app)
 
         # Optional build
         if params.build:
             build_cmd = ["docker", "compose", "-f", str(compose_file), "build"]
+            if container:
+                build_cmd.append(container)
             code, out, err = run_bounded_subprocess(build_cmd, cwd=app_dir, env=env, timeout=300.0)
             if code != 0:
                 raise RouterExecutionError(f"docker compose build failed: {err}", exit_code=code)
@@ -676,13 +750,16 @@ class OperationalRouter:
         up_cmd = ["docker", "compose", "-f", str(compose_file), "up", "-d"]
         if params.remove_orphans:
             up_cmd.append("--remove-orphans")
+        if container:
+            up_cmd.append(container)
 
         code, out, err = run_bounded_subprocess(up_cmd, cwd=app_dir, env=env, timeout=300.0)
         if code != 0:
             raise RouterExecutionError(f"docker compose up failed: {err}", exit_code=code)
 
-        # Trigger Homepage sync
-        self._trigger_homepage_sync()
+        # Trigger Homepage sync for Sites workloads
+        if not is_core:
+            self._trigger_homepage_sync()
 
         return {
             "output": out,
@@ -691,47 +768,58 @@ class OperationalRouter:
         }
 
     def _op_workload_stop(self, app: Any) -> dict[str, Any]:
-        app_dir = Path(app.dir_path)
-        manifest, compose_file = validate_workload_preflight(app_dir, self.sites_dir, app.name)
-        env = assemble_workload_env(app_dir, manifest, app.name)
+        app_dir, _, compose_file, env, container = self._prepare_target_context(app)
+        is_core = self._is_core_target(app)
 
-        cmd = ["docker", "compose", "-f", str(compose_file), "down"]
+        if container:
+            cmd = ["docker", "compose", "-f", str(compose_file), "stop", container]
+        else:
+            cmd = ["docker", "compose", "-f", str(compose_file), "down"]
+
         code, out, err = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=300.0)
         if code != 0:
-            raise RouterExecutionError(f"docker compose down failed: {err}", exit_code=code)
+            raise RouterExecutionError(f"docker compose stop/down failed: {err}", exit_code=code)
 
-        self._trigger_homepage_sync()
+        if not is_core:
+            self._trigger_homepage_sync()
         return {"output": out, "action": "stopped", "message": f"Workload '{app.name}' stopped"}
 
     def _op_workload_restart(self, app: Any) -> dict[str, Any]:
-        app_dir = Path(app.dir_path)
-        manifest, compose_file = validate_workload_preflight(app_dir, self.sites_dir, app.name)
-        env = assemble_workload_env(app_dir, manifest, app.name)
+        app_dir, _, compose_file, env, container = self._prepare_target_context(app)
+        is_core = self._is_core_target(app)
 
         cmd = ["docker", "compose", "-f", str(compose_file), "restart"]
+        if container:
+            cmd.append(container)
+
         code, out, err = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=300.0)
         if code != 0:
             raise RouterExecutionError(f"docker compose restart failed: {err}", exit_code=code)
 
-        self._trigger_homepage_sync()
+        if not is_core:
+            self._trigger_homepage_sync()
         return {"output": out, "action": "restarted", "message": f"Workload '{app.name}' restarted"}
 
     def _op_workload_pull(self, app: Any) -> dict[str, Any]:
-        app_dir = Path(app.dir_path)
-        manifest, compose_file = validate_workload_preflight(app_dir, self.sites_dir, app.name)
-        env = assemble_workload_env(app_dir, manifest, app.name)
+        app_dir, _, compose_file, env, container = self._prepare_target_context(app)
+        is_core = self._is_core_target(app)
 
         pull_cmd = ["docker", "compose", "-f", str(compose_file), "pull"]
+        if container:
+            pull_cmd.append(container)
         code, _, err = run_bounded_subprocess(pull_cmd, cwd=app_dir, env=env, timeout=300.0)
         if code != 0:
             raise RouterExecutionError(f"docker compose pull failed: {err}", exit_code=code)
 
         up_cmd = ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"]
+        if container:
+            up_cmd.append(container)
         code, out_up, err_up = run_bounded_subprocess(up_cmd, cwd=app_dir, env=env, timeout=300.0)
         if code != 0:
             raise RouterExecutionError(f"docker compose up failed after pull: {err_up}", exit_code=code)
 
-        self._trigger_homepage_sync()
+        if not is_core:
+            self._trigger_homepage_sync()
         return {"output": out_up, "action": "pulled", "message": f"Workload '{app.name}' pulled and updated"}
 
     def _op_workload_update(
@@ -748,6 +836,8 @@ class OperationalRouter:
         params = request.parse_parameters()
         assert isinstance(params, UpdateParams)
         app_dir = Path(app.dir_path)
+        is_core = self._is_core_target(app)
+        container = self._target_container(app)
 
         # 1. Clean working tree check
         code, status_out, _ = run_bounded_subprocess(
@@ -771,20 +861,25 @@ class OperationalRouter:
             raise RouterExecutionError(f"git pull failed for '{app.name}': {pull_err}", exit_code=code)
 
         # 3. Post-pull re-validation of manifest and expected_branch
-        manifest, compose_file = validate_workload_preflight(app_dir, self.sites_dir, app.name)
-        if (
-            params.expected_branch
-            and manifest.source
-            and manifest.source.ref != params.expected_branch
-        ):
-            raise RouterValidationError(
-                f"Post-pull branch mismatch for '{app.name}': expected '{params.expected_branch}', "
-                f"manifest declared '{manifest.source.ref}'"
-            )
+        if is_core:
+            compose_file = validate_core_preflight(app_dir, self.core_dir)
+            manifest = None
+            declared_actions = ["compose_pull", "compose_up"]
+        else:
+            manifest, compose_file = validate_workload_preflight(app_dir, self.sites_dir, app.name)
+            if (
+                params.expected_branch
+                and manifest.source
+                and manifest.source.ref != params.expected_branch
+            ):
+                raise RouterValidationError(
+                    f"Post-pull branch mismatch for '{app.name}': expected '{params.expected_branch}', "
+                    f"manifest declared '{manifest.source.ref}'"
+                )
+            declared_actions = manifest.deployment.actions or ["compose_up"]
 
-        # 4. Execute declared actions from manifest
+        # 4. Execute declared actions
         env = assemble_workload_env(app_dir, manifest, app.name)
-        declared_actions = manifest.deployment.actions or ["compose_up"]
         output_log = [f"git: {pull_out.strip()}"]
 
         for action in declared_actions:
@@ -800,6 +895,9 @@ class OperationalRouter:
                 cmd = ["docker", "compose", "-f", str(compose_file), "restart"]
             else:
                 continue
+
+            if container:
+                cmd.append(container)
 
             code, act_out, act_err = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=300.0)
             if code != 0:
@@ -818,7 +916,8 @@ class OperationalRouter:
         commit_sha = sha_out.strip() or None
 
         # 6. Trigger Homepage sync
-        self._trigger_homepage_sync()
+        if not is_core:
+            self._trigger_homepage_sync()
 
         return {
             "output": "\n".join(output_log),
