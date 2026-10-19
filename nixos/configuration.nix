@@ -63,9 +63,10 @@
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICAVPPMk+WApUd/fo78+lsRGnLKSlY4GDZiNGKwBAifD"
     ];
     extraGroups = [
-      "wheel"          # sudo access
-      "docker"         # run docker without sudo
-      "networkmanager" # modify network settings
+      "wheel"             # sudo access
+      "docker"            # run docker without sudo
+      "homelab-operators" # access /run/homelab/appctl.sock
+      "networkmanager"    # modify network settings
     ];
   };
 

@@ -484,7 +484,7 @@ class AppctlDaemon:
         try:
             os.chmod(self.socket_path, 0o660)
         except OSError as e:
-            logger.warning("Could not set mode 0660 on socket %s: %e", self.socket_path, e)
+            logger.warning("Could not set mode 0660 on socket %s: %s", self.socket_path, e)
 
         # 2. Prepare and bind TCP listener
         self.tcp_server = ThreadingHTTPServer((self.http_host, self.http_port), AppctlHTTPHandler)

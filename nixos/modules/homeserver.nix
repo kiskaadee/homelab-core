@@ -109,7 +109,7 @@
     serviceConfig = {
       Type = "simple";
       User = config.homelab.operatorUser;
-      SupplementaryGroups = [ "docker" ];
+      SupplementaryGroups = [ "docker" "homelab-operators" ];
       WorkingDirectory = config.homelab.coreDir;
       ExecStart = "${pkgs.webhook}/bin/webhook -hooks ${pkgs.writeText "hooks.json" (builtins.toJSON [
         {
@@ -137,12 +137,13 @@
       ReadWritePaths = [
         config.homelab.sitesDir
         "/home/${config.homelab.operatorUser}/.local/state/homelab"
+        "/run/homelab"
       ];
     };
   };
 
   # Declarative Users and Groups for Control Plane Service Identity
-  users.groups.homelab-operators = {};
+  users.groups.homelab-operators.members = [ config.homelab.operatorUser ];
   users.users.homelab-appctl = {
     isSystemUser = true;
     group = "homelab-operators";
@@ -168,6 +169,9 @@
     ];
 
     environment = {
+      HOME = "/var/lib/homelab/appctl";
+      DOCKER_CONFIG = "/var/lib/homelab/appctl/.docker";
+      HOMELAB_DOMAIN = config.homelab.domain;
       APPCTL_SOCKET_PATH = "/run/homelab/appctl.sock";
       APPCTL_HTTP_HOST = "127.0.0.1";
       APPCTL_HTTP_PORT = "9001";
