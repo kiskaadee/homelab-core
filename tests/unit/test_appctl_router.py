@@ -768,3 +768,48 @@ def test_operational_router_rejects_operator_role_on_core_targets(
         assert resp.error is not None
         assert resp.error.code == ErrorCode.ERR_PERMISSION_DENIED
 
+
+def test_operational_router_workload_list_honors_filter_params(
+    tmp_path: Path,
+    viewer_principal: Principal,
+    mock_workload_dir: Path,
+    mock_core_dir: Path,
+):
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_workload_dir.parent,
+        core_dir=mock_core_dir,
+    )
+
+    # Without --core: only Sites workloads (1)
+    resp_sites = router.dispatch(
+        OperationRequest.model_validate({
+            "operation": "workload.list",
+            "parameters": {"core": False, "fetch": False, "ssl": False},
+        }),
+        viewer_principal,
+    )
+    assert resp_sites.success is True
+    assert resp_sites.result is not None
+    assert resp_sites.result["total"] == 1
+    assert resp_sites.result["workloads"][0]["name"] == "snappymail"
+
+    # With --core and --ssl: includes Core services and SSL inspection
+    with patch("appctl_router.check_ssl_cert", return_value={"status": "🟢 80d remaining", "domain": "example.test"}) as mock_ssl:
+        resp_core = router.dispatch(
+            OperationRequest.model_validate({
+                "operation": "workload.list",
+                "parameters": {"core": True, "fetch": False, "ssl": True},
+            }),
+            viewer_principal,
+        )
+        assert resp_core.success is True
+        assert resp_core.result is not None
+        names = {w["name"] for w in resp_core.result["workloads"]}
+        assert "snappymail" in names
+        assert "traefik" in names
+        assert "authelia" in names
+        assert mock_ssl.call_count >= 1
+
+

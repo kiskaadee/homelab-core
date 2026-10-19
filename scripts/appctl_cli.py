@@ -48,6 +48,120 @@ def resolve_token(cli_token: str | None = None) -> str | None:
     return None
 
 
+def _format_workload_table(workloads: list[dict[str, Any]]) -> str:
+    """Format a list of workload dictionaries into a human-readable tabular display."""
+    if not workloads:
+        return "ℹ️  No workloads found."
+
+    has_ssl = any("ssl" in w and isinstance(w["ssl"], dict) for w in workloads)
+    lines: list[str] = []
+
+    if has_ssl:
+        lines.append(
+            f"{'SERVICE':<18} {'TYPE':<14} {'DOMAIN':<30} {'CERT':<24} {'DESCRIPTION'}"
+        )
+        lines.append(
+            f"{'-------':<18} {'----':<14} {'------':<30} {'----':<24} {'-----------'}"
+        )
+    else:
+        lines.append(
+            f"{'SERVICE':<18} {'TYPE':<14} {'DOMAIN':<30} {'DESCRIPTION'}"
+        )
+        lines.append(
+            f"{'-------':<18} {'----':<14} {'------':<30} {'-----------'}"
+        )
+
+    for w in workloads:
+        name = str(w.get("name", "-"))
+        w_type = str(w.get("type", w.get("app_type", "app")))
+        domain = str(w.get("domain", "-"))
+        desc = str(w.get("description", ""))
+        if w.get("manifest_error"):
+            desc = f"⚠️ {w['manifest_error']}"
+        elif w.get("deployment_status"):
+            desc = f"{w['deployment_status']} ({w.get('provenance_status', '-')})"
+
+        if has_ssl:
+            ssl_info = w.get("ssl")
+            cert_status = (
+                str(ssl_info.get("status", "-"))
+                if isinstance(ssl_info, dict)
+                else "-"
+            )
+            lines.append(
+                f"{name:<18} {w_type:<14} {domain:<30} {cert_status:<24} {desc}"
+            )
+        else:
+            lines.append(f"{name:<18} {w_type:<14} {domain:<30} {desc}")
+
+    return "\n".join(lines)
+
+
+def _format_workload_info(workload: dict[str, Any]) -> str:
+    """Format a single workload metadata dictionary for `appctl info`."""
+    name = workload.get("name", "unknown")
+    w_type = workload.get("type", workload.get("app_type", "app"))
+    header = (
+        f"ℹ️  Core Infrastructure Service: {name}"
+        if w_type in ("core", "core_service")
+        else f"ℹ️  Workload Overview: {name}"
+    )
+    lines = [
+        header,
+        "-" * 50,
+        f"Directory:       {workload.get('dir_path', '-')}",
+        f"Domain:          {workload.get('domain', '-')}",
+        f"Type:            {w_type}",
+        f"Description:     {workload.get('description', '-')}",
+    ]
+    if workload.get("container"):
+        lines.append(f"Container:       {workload['container']}")
+    aliases = workload.get("aliases")
+    if isinstance(aliases, list) and aliases:
+        lines.append(f"Aliases:         {', '.join(str(a) for a in aliases)}")
+    networks = workload.get("networks")
+    if isinstance(networks, list) and networks:
+        lines.append(f"Networks:        {', '.join(str(n) for n in networks)}")
+    if "auth" in workload:
+        lines.append(f"Auth Protected:  {workload['auth']}")
+    if "visible" in workload:
+        lines.append(f"Dashboard:       {'Visible' if workload['visible'] else 'Hidden'}")
+    source = workload.get("source")
+    if isinstance(source, dict):
+        lines.append(f"Source URL:      {source.get('url', '-')}")
+        lines.append(f"Target Ref:      {source.get('ref', '-')}")
+    if workload.get("manifest_error"):
+        lines.append(f"\n⚠️  Manifest Validation Error:\n  {workload['manifest_error']}")
+    ssl_info = workload.get("ssl")
+    if isinstance(ssl_info, dict):
+        lines.append("\n🔒 SSL/TLS Certificate:")
+        lines.append(f"  Status:        {ssl_info.get('status', '-')}")
+        lines.append(f"  Issuer:        {ssl_info.get('issuer', '-')}")
+        lines.append(f"  Expiration:    {ssl_info.get('formatted_expiry', '-')}")
+    return "\n".join(lines)
+
+
+def _format_ssl_info(ssl_info: dict[str, Any]) -> str:
+    """Format SSL certificate details for `appctl ssl`."""
+    domain = ssl_info.get("domain", "-")
+    lines = [
+        f"🔒 SSL/TLS Certificate: {domain}",
+        "-" * 50,
+        f"Domain:          {domain}",
+        f"Status:          {ssl_info.get('status', '-')}",
+        f"Issuer:          {ssl_info.get('issuer', '-')}",
+        f"Subject:         {ssl_info.get('subject', '-')}",
+        f"Expiration:      {ssl_info.get('not_after', '-')}",
+    ]
+    if ssl_info.get("days_remaining") is not None:
+        lines.append(
+            f"Days Remaining:  {ssl_info['days_remaining']} days ({ssl_info.get('formatted_expiry', '-')})"
+        )
+    if ssl_info.get("error"):
+        lines.append(f"Details/Error:   {ssl_info['error']}")
+    return "\n".join(lines)
+
+
 def format_response(resp: OperationResponse, raw_json: bool = False) -> str:
     """Format an OperationResponse for human-friendly terminal display or JSON output."""
     if raw_json:
@@ -63,6 +177,14 @@ def format_response(resp: OperationResponse, raw_json: bool = False) -> str:
         return resp.output
 
     if resp.result:
+        if "workloads" in resp.result and isinstance(resp.result["workloads"], list):
+            return _format_workload_table(resp.result["workloads"])
+        if resp.operation == OperationType.WORKLOAD_RESOLVE and "workload" in resp.result:
+            return json.dumps(resp.result["workload"])
+        if "workload" in resp.result and isinstance(resp.result["workload"], dict):
+            return _format_workload_info(resp.result["workload"])
+        if "ssl" in resp.result and isinstance(resp.result["ssl"], dict):
+            return _format_ssl_info(resp.result["ssl"])
         if "message" in resp.result and len(resp.result) <= 3:
             return f"✨ {resp.result['message']}"
         return json.dumps(resp.result, indent=2)
@@ -101,14 +223,18 @@ def run_cli(argv: list[str] | None = None) -> int:
 
     # list / status
     list_p = subparsers.add_parser("list", aliases=["status"], parents=[common_parser], help="List workloads")
-    list_p.add_argument("--core", action="store_true", help="Include core platform services")
-    list_p.add_argument("--fetch", action="store_true", help="Fetch remote git revisions")
-    list_p.add_argument("--ssl", action="store_true", help="Check SSL certificate status")
+    list_p.add_argument("--core", "-c", "--all", "-a", action="store_true", dest="core", help="Include core platform services")
+    list_p.add_argument("--fetch", "-f", action="store_true", help="Fetch remote git revisions")
+    list_p.add_argument("--ssl", "-s", action="store_true", help="Check SSL certificate status")
 
     # info
     info_p = subparsers.add_parser("info", parents=[common_parser], help="Get workload metadata")
     info_p.add_argument("target", help="Workload name")
-    info_p.add_argument("--ssl", action="store_true", help="Check SSL certificate status")
+    info_p.add_argument("--ssl", "-s", action="store_true", help="Check SSL certificate status")
+
+    # resolve
+    resolve_p = subparsers.add_parser("resolve", parents=[common_parser], help="Resolve target metadata")
+    resolve_p.add_argument("target", help="Workload or core target")
 
     # ssl
     ssl_p = subparsers.add_parser("ssl", parents=[common_parser], help="Inspect platform SSL certificates")
@@ -176,6 +302,11 @@ def run_cli(argv: list[str] | None = None) -> int:
             operation=OperationType.WORKLOAD_GET,
             target=parsed.target,
             parameters={"ssl": getattr(parsed, "ssl", False)},
+        )
+    elif cmd == "resolve":
+        op_req = OperationRequest(
+            operation=OperationType.WORKLOAD_RESOLVE,
+            target=parsed.target,
         )
     elif cmd == "ssl":
         op_req = OperationRequest(

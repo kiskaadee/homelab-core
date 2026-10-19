@@ -62,6 +62,7 @@ from appctl_engine import (
 from appctl_engine import (
     check_ssl_cert,
     cmd_sync_homepage,
+    get_core_services,
     get_sites_apps,
     resolve_app,
 )
@@ -73,6 +74,7 @@ from core_manifest import (
     parse_manifest,
 )
 from gitops_dispatcher import validate_compose_security
+from provenance import inspect_workload_two_axis
 
 MAX_OUTPUT_BYTES = 256 * 1024  # 256 KiB cap per invocation
 
@@ -660,7 +662,33 @@ class OperationalRouter:
         params = request.parse_parameters()
         assert isinstance(params, ListParams)
         apps = get_sites_apps(sites_dir=str(self.sites_dir))
-        apps_data = [a.to_dict() for a in apps]
+        apps_data: list[dict[str, Any]] = []
+
+        for app in apps:
+            item = app.to_dict()
+            app_path = Path(app.dir_path)
+            if params.fetch:
+                manifest_obj = app.manifest_obj or Manifest(
+                    name=app.name, domain=app.domain
+                )
+                two_axis = inspect_workload_two_axis(
+                    app_dir=app_path,
+                    manifest=manifest_obj,
+                    fetch_upstream=True,
+                )
+                item["deployment_status"] = two_axis.checkout.status_label
+                item["provenance_status"] = two_axis.provenance.status.value
+            if params.ssl and not app.is_internal:
+                item["ssl"] = check_ssl_cert(app.domain)
+            apps_data.append(item)
+
+        if params.core:
+            for svc in get_core_services(core_dir=str(self.core_dir)):
+                svc_dict = svc.to_dict()
+                if params.ssl and not svc.is_internal:
+                    svc_dict["ssl"] = check_ssl_cert(svc.domain)
+                apps_data.append(svc_dict)
+
         return {
             "total": len(apps_data),
             "workloads": apps_data,
@@ -671,6 +699,8 @@ class OperationalRouter:
         params = request.parse_parameters()
         assert isinstance(params, GetParams)
         data = app.to_dict()
+        if params.ssl and not getattr(app, "is_internal", True):
+            data["ssl"] = check_ssl_cert(app.domain)
         return {"workload": data, "message": f"Retrieved metadata for {app.name}"}
 
     def _op_workload_resolve(self, app: Any) -> dict[str, Any]:

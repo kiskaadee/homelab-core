@@ -12,10 +12,17 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 SOCKET_PATH="${APPCTL_SOCKET_PATH:-/run/homelab/appctl.sock}"
 CLI_CLIENT="$SCRIPT_DIR/appctl_cli.py"
 
-# If daemon Unix domain socket exists, delegate directly to thin client
-if [ -S "$SOCKET_PATH" ] && [ -f "$CLI_CLIENT" ]; then
-  exec "$PYTHON_BIN" "$CLI_CLIENT" "$@"
-fi
+# If daemon Unix domain socket exists, delegate operational commands directly to thin client
+# (fast-path local completion and resolution helpers through appctl_engine.py)
+case "${1:-}" in
+  complete|completion|resolve)
+    ;;
+  *)
+    if [ -S "$SOCKET_PATH" ] && [ -f "$CLI_CLIENT" ]; then
+      exec "$PYTHON_BIN" "$CLI_CLIENT" "$@"
+    fi
+    ;;
+esac
 
 ENV_FILE="/run/secrets/rendered/traefik-deployments.env"
 if [ ! -f "$ENV_FILE" ] && [ -f "/run/secrets/traefik-deployments.env" ]; then

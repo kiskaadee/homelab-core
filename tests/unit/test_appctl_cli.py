@@ -113,3 +113,118 @@ def test_cli_handles_missing_socket():
         ret = run_cli(["list", "--socket", "/nonexistent/appctl.sock"])
         assert ret == 1
         assert "socket not found" in mock_stderr.getvalue()
+
+
+def test_cli_format_response_renders_workload_list_table():
+    """Ensure workload.list renders a human-readable table instead of suppressing it behind result['message']."""
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_list_01",
+        operation=OperationType.WORKLOAD_LIST,
+        result={
+            "total": 2,
+            "workloads": [
+                {
+                    "name": "snappymail",
+                    "type": "app",
+                    "domain": "mail.example.test",
+                    "description": "Webmail client",
+                },
+                {
+                    "name": "traefik",
+                    "type": "core_service",
+                    "domain": "traefik.example.test",
+                    "description": "Edge Reverse Proxy",
+                },
+            ],
+            "message": "Found 2 workloads",
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert "SERVICE" in rendered
+    assert "DOMAIN" in rendered
+    assert "snappymail" in rendered
+    assert "mail.example.test" in rendered
+    assert "traefik" in rendered
+    assert "Edge Reverse Proxy" in rendered
+    assert "✨ Found 2 workloads" not in rendered
+
+
+def test_cli_format_response_renders_workload_get_info():
+    """Ensure workload.get (appctl info) renders structured workload metadata."""
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_get_01",
+        operation=OperationType.WORKLOAD_GET,
+        target="snappymail",
+        result={
+            "workload": {
+                "name": "snappymail",
+                "type": "app",
+                "dir_path": "/home/operator/Sites/snappymail",
+                "domain": "mail.example.test",
+                "description": "Lightweight Webmail",
+                "aliases": ["webmail", "mail"],
+                "networks": ["proxy-net"],
+                "auth": True,
+                "visible": True,
+            },
+            "message": "Retrieved metadata for snappymail",
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert "Workload Overview: snappymail" in rendered
+    assert "/home/operator/Sites/snappymail" in rendered
+    assert "mail.example.test" in rendered
+    assert "webmail, mail" in rendered
+    assert "✨ Retrieved metadata" not in rendered
+
+
+def test_appctl_wrapper_fast_paths_completion_when_socket_exists(tmp_path: Path, monkeypatch):
+    """Ensure scripts/appctl executes `complete` and `completion` via appctl_engine.py even when socket exists."""
+    import os
+    import shutil
+    import socket as std_socket
+    import subprocess
+    import sys
+
+    bash_bin = shutil.which("bash") or "bash"
+    sock_path = tmp_path / "appctl.sock"
+    srv = std_socket.socket(std_socket.AF_UNIX, std_socket.SOCK_STREAM)
+    srv.bind(str(sock_path))
+    try:
+        appctl_script = Path(__file__).resolve().parent.parent.parent / "scripts" / "appctl"
+        env = {
+            "PATH": os.environ.get("PATH", "/run/current-system/sw/bin:/usr/bin:/bin"),
+            "PYTHON_BIN": sys.executable,
+            "HOMELAB_DOMAIN": "example.test",
+            "APPCTL_SOCKET_PATH": str(sock_path),
+            "SITES_DIR": str(tmp_path),
+        }
+        res_comp = subprocess.run(
+            [bash_bin, str(appctl_script), "completion", "bash"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert res_comp.returncode == 0
+        assert "_appctl_completions()" in res_comp.stdout
+
+        res_words = subprocess.run(
+            [bash_bin, str(appctl_script), "complete", "services"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert res_words.returncode == 0
+        assert "traefik" in res_words.stdout
+        assert "core" in res_words.stdout
+    finally:
+        srv.close()
+
