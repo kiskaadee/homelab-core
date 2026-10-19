@@ -116,6 +116,79 @@
     };
   };
 
+  # Declarative Users and Groups for Control Plane Service Identity
+  users.groups.homelab-operators = {};
+  users.users.homelab-appctl = {
+    isSystemUser = true;
+    group = "homelab-operators";
+    extraGroups = [ "docker" ];
+    description = "Homelab appctl control plane daemon service user";
+  };
+
+  # Declarative appctl Control Plane Daemon (Internal HTTP 9001 + UDS /run/homelab/appctl.sock)
+  systemd.services.homelab-appctl = {
+    description = "Homelab appctl Control Plane Daemon";
+    after = [ "network-online.target" "docker.service" ];
+    wants = [ "network-online.target" ];
+    wantedBy = [ "multi-user.target" ];
+
+    path = with pkgs; [
+      git
+      docker
+      docker-compose
+      (python3.withPackages (ps: with ps; [ pyyaml pydantic ]))
+      coreutils
+      bash
+      openssh
+    ];
+
+    environment = {
+      APPCTL_SOCKET_PATH = "/run/homelab/appctl.sock";
+      APPCTL_HTTP_HOST = "127.0.0.1";
+      APPCTL_HTTP_PORT = "9001";
+      APPCTL_AUDIT_LOG = "/var/log/homelab/appctl/audit.jsonl";
+      APPCTL_LOCK_DIR = "/var/lib/homelab/appctl/locks";
+      APPCTL_TOKENS_FILE = "/run/secrets/appctl/tokens.json";
+      SITES_DIR = "/home/kiskaadee/Sites";
+      CORE_DIR = "/home/kiskaadee/Core";
+      HOMELAB_CONFIG_DIR = "/home/kiskaadee/.config/homelab";
+      HOMELAB_DEPLOYMENTS_FILE = "/home/kiskaadee/Core/config/deployments.yaml";
+    };
+
+    serviceConfig = {
+      Type = "simple";
+      User = "homelab-appctl";
+      Group = "homelab-operators";
+      SupplementaryGroups = [ "docker" ];
+      WorkingDirectory = "/home/kiskaadee/Core";
+      ExecStart = "${(pkgs.python3.withPackages (ps: with ps; [ pyyaml pydantic ]))}/bin/python3 /home/kiskaadee/Core/scripts/appctl_daemon.py";
+      Restart = "always";
+      RestartSec = "5s";
+
+      RuntimeDirectory = "homelab";
+      RuntimeDirectoryMode = "0750";
+      StateDirectory = "homelab/appctl";
+      StateDirectoryMode = "0700";
+      LogsDirectory = "homelab/appctl";
+      LogsDirectoryMode = "0700";
+
+      NoNewPrivileges = true;
+      PrivateTmp = true;
+      ProtectSystem = "strict";
+      ProtectHome = "read-only";
+      ProtectKernelTunables = true;
+      ProtectControlGroups = true;
+      ReadWritePaths = [
+        "/home/kiskaadee/Sites"
+        "/home/kiskaadee/var/lib/homelab"
+        "/home/kiskaadee/Core/config/homepage"
+        "/var/log/homelab/appctl"
+        "/var/lib/homelab/appctl"
+        "/run/homelab"
+      ];
+    };
+  };
+
   # Ensure persistent directories have proper permissions for container runtimes
   systemd.tmpfiles.rules = [
     "d /home/kiskaadee/Core/config/stalwart/data 0777 kiskaadee users -"
@@ -123,6 +196,12 @@
     "d /home/kiskaadee/Sites 0755 kiskaadee users -"
     "d /home/kiskaadee/.local/state/homelab/gitops 0755 kiskaadee users -"
     "d /home/kiskaadee/.local/state/homelab/docker 0755 kiskaadee users -"
+    # POSIX ACLs granting homelab-appctl traverse and access to operator sites & homepage config
+    "a+ /home/kiskaadee - - - - u:homelab-appctl:x"
+    "a+ /home/kiskaadee/Core - - - - u:homelab-appctl:x"
+    "a+ /home/kiskaadee/Sites - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
+    "a+ /home/kiskaadee/var/lib/homelab - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
+    "a+ /home/kiskaadee/Core/config/homepage - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
   ];
 
   # Open ports in the firewall for Traefik, Gitea SSH, GitOps Webhook Receiver, and Mail (SMTP, Submission, SMTPS, IMAPS, ManageSieve)

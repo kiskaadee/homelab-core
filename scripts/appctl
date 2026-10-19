@@ -9,6 +9,14 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE="$SCRIPT_DIR/appctl_engine.py"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+SOCKET_PATH="${APPCTL_SOCKET_PATH:-/run/homelab/appctl.sock}"
+CLI_CLIENT="$SCRIPT_DIR/appctl_cli.py"
+
+# If daemon Unix domain socket exists, delegate directly to thin client
+if [ -S "$SOCKET_PATH" ] && [ -f "$CLI_CLIENT" ]; then
+  exec "$PYTHON_BIN" "$CLI_CLIENT" "$@"
+fi
+
 ENV_FILE="/run/secrets/rendered/traefik-deployments.env"
 if [ ! -f "$ENV_FILE" ] && [ -f "/run/secrets/traefik-deployments.env" ]; then
   ENV_FILE="/run/secrets/traefik-deployments.env"
