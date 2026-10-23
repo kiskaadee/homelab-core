@@ -35,3 +35,11 @@ x 2026-10-19 (A) Restore human-readable tabular output, list filter parameters, 
 x 2026-10-19 (A) Add operatorUser to homelab-operators group and configure daemon systemd sandbox HOME and DOCKER_CONFIG in nixos/modules/homeserver.nix +nixos @p4
 x 2026-10-19 (A) Provision SOPS appctl/tokens_json and gitops/appctl_token secrets and wire GITOPS_APPCTL_TOKEN_FILE in nixos/secrets.yaml and nixos/modules/homeserver.nix +secrets @p4
 x 2026-10-19 (B) Reconcile operational documentation and ROADMAP.md with Milestone P4 control plane daemon architecture +docs @p4
+(A) Migrate operator user from kiskaadee to operator in nixos/configuration.nix and homeserver.nix +nixos @core
+(A) Derive LLDAP_LDAP_BASE_DN dynamically from homelab.domain in nixos/modules/homeserver.nix and docker-compose.yml +nixos @auth
+(A) Change systemd.tmpfiles.rules to recursive A+ ACLs for Sites and homepage in nixos/modules/homeserver.nix +nixos @perms
+(A) Declare global Git safe.directory for /home/operator/Sites/* in nixos/configuration.nix +nixos @git
+(B) Enforce fail-closed check on daemon socket availability and remove silent Bash fallback in scripts/appctl +cli @security
+(B) Restore live container status inspection in workload.list and format STATUS column in scripts/appctl_cli.py +cli @ux
+(B) Bootstrap operator admin token provisioning helper and documentation in docs/appctl.md and docs/secrets-and-state.md +docs @auth
+(C) Deprecate P6 on-server AI authoring compiler in favor of external Homelab MCP Gateway in ROADMAP.md and ADR 0002 +docs @roadmap

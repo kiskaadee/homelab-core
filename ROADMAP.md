@@ -46,7 +46,7 @@ It describes the implementation trajectory and phased engineering milestones for
 | **P3** | **Manifest Contract** | Domain Engine | ✅ **Completed** | Schema v1.0 with Pydantic v2 fail-closed models (`core_manifest.py`), two-axis status inspection, unified `appctl_engine.py`. |
 | **P4** | **Control Plane Daemon** | API & Dispatch | ✅ **Completed** | `homelab-appctl.service` daemon, dual transports (socket + HTTP), mandatory auth admission gate, thin-client CLI, append-only audit log. |
 | **P5** | **Identity & Secrets** | Auth & Providers | 🎯 **Current / Up Next** | LLDAP RBAC group mapping, Authelia ForwardAuth header integration, user-scoped token lifecycle, `SecretProvider` reference resolution. |
-| **P6** | **Deployment Model & AI**| Intent Authoring | ⏳ **Planned** | Capability catalog, `DeploymentProposal` $\to$ `DeploymentModel` compiler, Git commit pipeline. |
+| **P6** | **Homelab MCP Gateway** | Protocol Integration | ⏳ **Planned** | Standardized JSON-RPC Model Context Protocol tools (`appctl_status`, `appctl_deploy`, `appctl_logs`), client-side human-in-the-loop approvals, deprecation of on-server AI proposal compilers. |
 | **P7** | **Operations UI & Portal** | Client Integration | ⏳ **Planned** | Dedicated Operations UI client, Homepage read-only status integration widgets. |
 
 ---
@@ -122,15 +122,15 @@ It describes the implementation trajectory and phased engineering milestones for
 
 ---
 
-### Milestone P6: Homelab Deployment Model & AI Authoring Workflow
-**Status**: ⏳ **Planned**
-* **Objective**: Enable safe, human-reviewed workload authoring from upstream repositories.
+### Milestone P6: Homelab MCP Gateway (Protocol Tool Integration)
+**Status**: ⏳ **Planned** *(Amended: Deprecated on-server `DeploymentProposal` compiler in favor of decoupled Model Context Protocol gateway)*
+* **Objective**: Expose `appctl` control plane capabilities over standardized JSON-RPC Model Context Protocol (MCP) tools for external AI assistants (Antigravity, Claude Code, Cursor) without running unverified autonomous agents on the appliance host.
 * **Key Deliverables**:
-  1. *Platform Capability Catalog*: Machine-readable specification of Core capabilities and security invariants.
-  2. *DeploymentProposal Schema*: Candidate model format produced by AI discovery workflows.
-  3. *DeploymentModel Git Pipeline*: Operator approves proposal into a `DeploymentModel`; the model is committed to the version-controlled deployment repository (Git).
-  4. *Materialization & Reconciliation*: `appctl` validates the committed model, provisions state roots, compiles platform descriptors (`app.yaml` + Compose), and reconciles running containers.
-* **Exit Criteria**: Human approval gate strictly enforced; AI possesses zero execution authority; generated workloads conform to all Core invariants.
+  1. *Protocol Tool Gateway*: Standardized MCP server wrapping deterministic `appctl` operations (`appctl_status`, `appctl_logs`, `appctl_deploy`, `appctl_audit`) over JSON-RPC.
+  2. *Client-Side Human-in-the-Loop Confirmation*: Native IDE/client confirmation gating for all mutating tools before execution.
+  3. *Deprecate On-Server AI Proposal Compiler*: Remove requirements for server-side `DeploymentProposal` $\to$ `DeploymentModel` pipelines; desired state remains standard Git-tracked declarative YAML (`app.yaml` + Compose).
+  4. *Schema & Tool Security Guards*: Strict Pydantic parameter validation on incoming MCP tool calls matching `appctl_contracts.py`.
+* **Exit Criteria**: External AI clients successfully query status, inspect logs, and request deployments through MCP with strict confirmation gates; Core boundaries remain 100% deterministic with zero autonomous agent code on the host.
 
 ---
 

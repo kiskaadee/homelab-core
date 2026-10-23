@@ -116,19 +116,23 @@ Restarts the target stack or individual container:
 * `appctl restart core`: Restarts all Core Compose services.
 * `appctl restart traefik`: Restarts only the Traefik container.
 
-#### `appctl update <service|core>`
-Performs a sequential update workflow:
+#### `appctl update <service>`
+Performs a sequential update workflow for a Sites workload stack:
 1. Verifies that the local Git working tree is clean (aborts if uncommitted changes exist).
 2. Runs `git pull --ff-only` to fast-forward the current branch.
 3. Runs `docker compose pull` to fetch updated container images.
 4. Runs `docker compose up -d --remove-orphans` to recreate containers.
 5. Runs `appctl sync` to update the Homepage dashboard.
 
+> [!NOTE]
+> Core platform updates are managed via version-controlled NixOS generations (`git pull` followed by `nixos-rebuild switch`), not through `appctl update core` (as Core is mounted read-only for `homelab-appctl.service`).
+
 #### `appctl pull <service|core>`
 Pulls latest container images and recreates the target service.
 
-#### `appctl logs <service|core>`
-Streams container logs (`docker compose logs -f`). Supports passing specific container names (`appctl logs core traefik` or `appctl logs stalwart`).
+#### `appctl logs <service|core> [--tail N]`
+Fetches a bounded snapshot of container logs (default: `--tail 100`). Supports passing a workload or targeted Core service container (e.g., `appctl logs traefik`).
+*(Note: As an HTTP/1.1 request-response API, log streaming `-f` is replaced by bounded snapshots).*
 
 #### `appctl config <service|core>`
 Validates the manifest and renders the resolved Docker Compose configuration with all injected variables. Fails closed if `app.yaml` is missing or invalid.

@@ -95,11 +95,10 @@ Chosen option: **Option 3: Authoritative `homelab-appctl.service` Daemon with Si
 * Shell `eval` and `source` are completely eliminated. Subprocess environments are assembled in memory via an inert pure-Python `KEY=VALUE` reader enforcing `ENV_KEY_RE`, `RESERVED_ENV_KEYS`, and canonical domain precedence (`HOMELAB_DOMAIN` $\to$ `DOMAIN_SUFFIX` $\to$ `DOMAIN`).
 * Every workload mutation and `workload.config` call enforces path containment, `core_manifest.parse_manifest()`, and `validate_compose_security()` pre-flight inspection before invoking Docker Compose.
 
-#### 6. Declarative Git Truth, Five-Stage Deployment Model & AI Boundary (P5–P7 Trajectory)
+#### 6. Declarative Git Truth, Model Context Protocol (MCP) Gateway & AI Boundary (P5–P7 Trajectory)
 * **Git is Authoritative**: Approved deployment definitions are versioned in Git; `appctl` reconciles desired Git state into running containers.
-* **Five-Stage Model Lifecycle (P6)**:
-  $$\text{Repository} \xrightarrow{\text{Investigation}} \text{Application Profile} \xrightarrow{\text{Proposal}} \text{DeploymentProposal} \xrightarrow{\text{Human Selection}} \text{DeploymentModel (Git)} \xrightarrow{\text{appctl Materialize}} \text{Deployment Definition} \xrightarrow{\text{Reconcile}} \text{Containers}$$
-* **AI Authoring Boundary (P6)**: AI agents act strictly as upstream `DeploymentProposal` generators with zero execution or mutation authority.
+* **Architecture Amendment (2026-10-23 — MCP Tool Gateway Supersedes On-Server Authoring)**:
+  The 5-stage on-server AI deployment authoring compiler (`ApplicationProfile` $\to$ `DeploymentProposal` $\to$ `DeploymentModel`) originally planned for Milestone P6 is **deprecated and superseded by a decoupled Model Context Protocol (MCP) Tool Gateway**. Rather than building bespoke AI authoring engines or autonomous agents into the appliance host, platform management operations (`appctl_status`, `appctl_deploy`, `appctl_logs`, `appctl_audit`) will be exposed via standardized JSON-RPC MCP tools consumed by external developer clients (Antigravity, Claude Code, Cursor) with native human-in-the-loop confirmation. The deterministic boundary of `appctl` is preserved, with zero autonomous AI agent code executing inside the appliance host.
 * **Secret Reference Invariant (P5)**: Manifests reference secrets by key (`secretKeyRef`) resolved at runtime via `SecretProvider`, never storing plaintext credentials in Git.
 * **Client Decoupling (P7)**: Homepage remains a read-only status portal; interactive web management belongs to a dedicated Operations UI client consuming `POST /v1/operations`.
 
