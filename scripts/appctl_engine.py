@@ -244,11 +244,10 @@ def get_sites_apps(sites_dir: str | None = None) -> list[SitesApp]:
             KeyError,
         ) as err:
             raw_data = None
-            with (
-                contextlib.suppress(Exception),
-                open(manifest_path, "r", encoding="utf-8") as f,
-            ):
+            with contextlib.suppress(Exception), open(manifest_path, "r", encoding="utf-8") as f:
                 raw_data = yaml.safe_load(f)
+
+
             app_dict = raw_data if isinstance(raw_data, dict) else {}
             apps.append(
                 sites_app_from_manifest(
@@ -516,12 +515,10 @@ def check_ssl_cert(
 
     try:
         ctx = ssl.create_default_context()
-        with (
-            socket.create_connection((domain, port), timeout=timeout) as sock,
-            ctx.wrap_socket(sock, server_hostname=domain) as ssock,
-        ):
-            raw_cert = ssock.getpeercert()
-            cert = raw_cert if isinstance(raw_cert, dict) else {}
+        with socket.create_connection((domain, port), timeout=timeout) as sock:  # noqa: SIM117
+            with ctx.wrap_socket(sock, server_hostname=domain) as ssock:
+                raw_cert = ssock.getpeercert()
+                cert = raw_cert if isinstance(raw_cert, dict) else {}
 
         not_after_str = str(cert.get("notAfter", ""))
         days_remaining = None

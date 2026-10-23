@@ -46,6 +46,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+mutants/
+.mutmut-cache/
 
 # Local Bootstrap & Operational Scripts
 scripts/bootstrap_lldap_users.py

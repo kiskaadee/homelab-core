@@ -33,7 +33,8 @@ from pydantic import (
 class StrictModel(BaseModel):
     """Base model propagating strict validation across all control plane models — ADR-0003."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="forbid", strict=True, ignored_types=(dict,))
+
 
 
 class OperationType(StrEnum):
@@ -241,7 +242,13 @@ def sanitize_validation_error(exc: ValidationError) -> OperationError:
 class OperationRequest(StrictModel):
     """Defines the body requirements of an HTTP/1.1 operation request."""
 
-    model_config = ConfigDict(extra="forbid", strict=True, populate_by_name=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        strict=True,
+        populate_by_name=True,
+        ignored_types=(dict,),
+    )
+
 
     version: Literal["1.0"] = "1.0"
     operation: FlexibleOperationType = Field(
@@ -272,14 +279,15 @@ class OperationRequest(StrictModel):
     def validate_request(self) -> OperationRequest:
         if self.operation in TARGET_REQUIRED_OPERATIONS and not self.target:
             raise ValueError(f"Operation '{self.operation.value}' requires a non-empty target")
-        param_model = OPERATION_PARAMS_MAP.get(self.operation, EmptyParams)
+        param_model = OPERATION_PARAMS_MAP[self.operation]
         param_model.model_validate(self.parameters)
         return self
 
     def parse_parameters(self) -> StrictModel:
         """Parse and return the typed parameter model for this operation."""
-        param_model = OPERATION_PARAMS_MAP.get(self.operation, EmptyParams)
+        param_model = OPERATION_PARAMS_MAP[self.operation]
         return param_model.model_validate(self.parameters)
+
 
 
 class OperationResponse(StrictModel):

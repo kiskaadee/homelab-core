@@ -310,7 +310,7 @@ def enforce_rbac(
             return
 
         # Target checks for operations targeting infrastructure
-        if target is not None and (target in CORE_TARGETS or target == "core"):
+        if target is not None and target in CORE_TARGETS:
             raise AuthorizationError(
                 f"Role 'homelab-operator' is not permitted to target core service '{target}'",
                 code=ErrorCode.ERR_PERMISSION_DENIED,

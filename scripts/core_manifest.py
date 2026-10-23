@@ -164,30 +164,16 @@ def classify_ref(ref_str: str) -> tuple[RefType, str]:
     if SEMVER_TAG_RE.match(ref):
         return RefType.TAG, ref
 
-    # Standard branch naming patterns
-    if ref in {
-        "main",
-        "master",
-        "develop",
-        "dev",
-        "trunk",
-        "staging",
-        "prod",
-        "production",
-    }:
-        return RefType.BRANCH, ref
-
-    if ref.startswith(("feat/", "fix/", "release/", "chore/", "refactor/")):
-        return RefType.BRANCH, ref
-
-    # Fallback default: non-versioned arbitrary string treated as branch
+    # Non-versioned arbitrary string treated as branch
     return RefType.BRANCH, ref
+
 
 
 class SourceConfig(BaseModel):
     """Upstream source provenance descriptor."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", ignored_types=(dict,))
+
 
     url: str
     ref: str = "main"
@@ -235,7 +221,8 @@ class SourceConfig(BaseModel):
 class DeploymentConfig(BaseModel):
     """Continuous deployment strategy and action policy."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", ignored_types=(dict,))
+
 
     strategy: str = "compose"
     branch: str = "main"
@@ -275,7 +262,8 @@ class DeploymentConfig(BaseModel):
 class HomepageConfig(BaseModel):
     """Dashboard card metadata for Homepage."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", ignored_types=(dict,))
+
 
     title: str
     group: str = "Applications"
@@ -301,7 +289,12 @@ class Manifest(BaseModel):
     Represents the full contract declared in a workload's app.yaml.
     """
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(
+        extra="forbid",
+        populate_by_name=True,
+        ignored_types=(dict,),
+    )
+
 
     name: str
     schema_version: str = Field(default="1.0", alias="schemaVersion")
