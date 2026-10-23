@@ -112,9 +112,13 @@ def test_audit_logger_writes_valid_jsonl_lifecycle(
         message="Workload updated and reconciled successfully",
     )
     assert evt_comp.phase == AuditPhase.COMPLETED
+    assert evt_comp.target == "jellyfin"
+    assert evt_comp.parameters == {"expected_branch": "main", "build": False}
     assert evt_comp.result is not None
     assert evt_comp.result.status == "SUCCESS"
     assert evt_comp.result.exit_code == 0
+    assert evt_comp.result.duration_ms == 1450
+    assert evt_comp.result.message == "Workload updated and reconciled successfully"
     assert evt_comp.result.commit_sha == "a1b2c3d"
 
     # Read and validate JSONL file contents
@@ -153,10 +157,14 @@ def test_audit_logger_writes_failed_event(
     assert len(lines) == 1
     event = AuditEvent.model_validate(json.loads(lines[0]))
     assert event.phase == AuditPhase.FAILED
+    assert event.target == "jellyfin"
+    assert event.parameters == {"recreate": True}
     assert event.result is not None
     assert event.result.status == "FAILED"
     assert event.result.exit_code == 1
     assert event.result.error_code == "ERR_EXECUTION_FAILED"
+    assert event.result.duration_ms == 320
+    assert event.result.message == "Docker compose failed with exit code 1"
 
 
 def test_audit_logger_writes_denied_event(
@@ -334,3 +342,16 @@ def test_homepage_sync_lock_acquires_designated_file(temp_lock_dir: Path):
 
     assert lock.lock_path.name == "_homepage_sync.lock"
     assert exc_info.value.target == "_homepage_sync"
+
+
+def test_target_lock_manager_sanitizes_special_characters_and_supports_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    custom_lock_dir = tmp_path / "custom_locks"
+    monkeypatch.setenv("APPCTL_LOCK_DIR", str(custom_lock_dir))
+    manager = TargetLockManager()
+    assert manager.lock_dir == custom_lock_dir
+
+    with manager.lock_target("special/tenant:workload@v1!#$") as lock:
+        assert lock.lock_path.name == "special_tenant_workload_v1___.lock"
+        assert lock.lock_path.exists()

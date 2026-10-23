@@ -171,6 +171,22 @@ def test_resolve_canonical_domain_precedence(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("DOMAIN_SUFFIX")
     assert resolve_canonical_domain() == "domain-c.test"
 
+    # Fails closed when domain is unset
+    monkeypatch.delenv("DOMAIN")
+    monkeypatch.setattr("appctl_router.ENGINE_HOMELAB_DOMAIN", "")
+    with pytest.raises(RouterValidationError, match="Canonical domain is unset"):
+        resolve_canonical_domain()
+
+    # Fails closed when domain is whitespace only
+    monkeypatch.setenv("HOMELAB_DOMAIN", "    ")
+    with pytest.raises(RouterValidationError, match="Canonical domain is unset"):
+        resolve_canonical_domain()
+
+    # Strips leading and trailing whitespace
+    monkeypatch.setenv("HOMELAB_DOMAIN", "  stripped.example.test  ")
+    assert resolve_canonical_domain() == "stripped.example.test"
+
+
 
 def test_assemble_workload_env_constructs_6_layer_environment(
     mock_workload_dir: Path, monkeypatch: pytest.MonkeyPatch

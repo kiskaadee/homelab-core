@@ -219,9 +219,35 @@ repositories:
     assert "unknown_app" not in admitted
 
 
-def test_load_admitted_workloads_fails_closed_on_missing_file(tmp_path: Path):
+def test_load_admitted_workloads_handles_aliases_edge_cases_and_json(tmp_path: Path):
+    deploy_file = tmp_path / "deployments.json"
+    deploy_file.write_text(json.dumps({
+        "repositories": {
+            "app1": {
+                "path": "/home/operator/Sites/app1",
+                "aliases": [123, None, "   ", "valid_alias"]
+            }
+        }
+    }), encoding="utf-8")
+
+    admitted = load_admitted_workloads(deploy_file)
+    assert "app1" in admitted
+    assert "valid_alias" in admitted
+    assert 123 not in admitted
+    assert None not in admitted
+    assert "" not in admitted
+
+
+def test_load_admitted_workloads_fails_closed_on_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     admitted = load_admitted_workloads(tmp_path / "missing.yaml")
     assert admitted == set()
+
+    # Test HOMELAB_DEPLOYMENTS_FILE fallback
+    deploy_file = tmp_path / "env_deploy.yaml"
+    deploy_file.write_text("repositories:\n  env_app:\n    path: /sites/env_app\n", encoding="utf-8")
+    monkeypatch.setenv("HOMELAB_DEPLOYMENTS_FILE", str(deploy_file))
+    admitted_env = load_admitted_workloads(None)
+    assert "env_app" in admitted_env
 
 
 # ---------------------------------------------------------------------------
@@ -274,6 +300,37 @@ def test_rbac_operator_denied_on_core_targets(
         with pytest.raises(AuthorizationError) as exc_info:
             enforce_rbac(operator, OperationType.WORKLOAD_RESTART, core_svc, admitted_workloads)
         assert f"not permitted to target core service '{core_svc}'" in str(exc_info.value)
+        assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
+
+
+def test_rbac_operator_denied_without_target_on_mutating_or_sensitive_ops(
+    admitted_workloads: set[str],
+):
+    operator = Principal(identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token")
+
+    for op in [OperationType.WORKLOAD_DEPLOY, OperationType.WORKLOAD_UPDATE, OperationType.WORKLOAD_CONFIG, OperationType.WORKLOAD_LOGS]:
+        with pytest.raises(AuthorizationError) as exc_info:
+            enforce_rbac(operator, op, None, admitted_workloads)
+        assert f"Operation '{op.value}' requires an explicit workload target" in str(exc_info.value)
+        assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
+
+        with pytest.raises(AuthorizationError) as exc_info:
+            enforce_rbac(operator, op, "", admitted_workloads)
+        assert f"Operation '{op.value}' requires an explicit workload target" in str(exc_info.value)
+        assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
+
+
+def test_rbac_operator_with_default_admitted_workloads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    deployments_file = tmp_path / "deployments.yaml"
+    deployments_file.write_text("repositories:\n  customapp:\n    path: ~/Sites/customapp\n", encoding="utf-8")
+    monkeypatch.setenv("HOMELAB_DEPLOYMENTS_FILE", str(deployments_file))
+
+    operator = Principal(identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token")
+    enforce_rbac(operator, OperationType.WORKLOAD_DEPLOY, "customapp", admitted_workloads=None)
+
+    with pytest.raises(AuthorizationError) as exc_info:
+        enforce_rbac(operator, OperationType.WORKLOAD_DEPLOY, "unknownapp", admitted_workloads=None)
+    assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
 
 
 def test_rbac_operator_denied_on_unregistered_workload(

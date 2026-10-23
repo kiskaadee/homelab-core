@@ -58,17 +58,70 @@ def test_validate_transport_rejects_http(insecure_url: str):
 
 
 @pytest.mark.parametrize(
+    "empty_or_invalid_url",
+    [
+        "",
+        "   ",
+        None,
+    ],
+)
+def test_validate_transport_rejects_empty_or_non_string(empty_or_invalid_url):
+    with pytest.raises(ManifestValidationError, match=r"^Source URL cannot be empty\.$"):
+        validate_transport(empty_or_invalid_url)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("root_path_url", "scheme"),
+    [
+        ("https://git.example.com/", "HTTPS"),
+        ("ssh://git.example.com/", "SSH"),
+    ],
+)
+def test_validate_transport_rejects_root_repository_path(root_path_url: str, scheme: str):
+    with pytest.raises(
+        ManifestValidationError,
+        match=rf"^Malformed {scheme} source URL \(missing repository path\)",
+    ):
+        validate_transport(root_path_url)
+
+
+@pytest.mark.parametrize(
     "traversal_url",
     [
         "../../etc/shadow",
         "/home/operator/secret",
         "~/vault",
-        "file:///etc/passwd",
+        r"repo\windows\payload",
+        r"..\traversal",
     ],
 )
 def test_validate_transport_rejects_paths_and_traversal(traversal_url: str):
-    with pytest.raises(ManifestValidationError):
+    with pytest.raises(
+        ManifestValidationError,
+        match="Prohibited filesystem path or traversal in source URL",
+    ):
         validate_transport(traversal_url)
+
+
+def test_validate_transport_rejects_file_scheme():
+    with pytest.raises(
+        ManifestValidationError,
+        match="Invalid source.url scheme: 'file:///etc/passwd'",
+    ):
+        validate_transport("file:///etc/passwd")
+
+
+@pytest.mark.parametrize(
+    "empty_ref",
+    [
+        "",
+        "   ",
+        None,
+        12345,
+    ],
+)
+def test_classify_ref_empty_or_invalid_defaults_to_main(empty_ref):
+    assert classify_ref(empty_ref) == (RefType.BRANCH, "main")  # type: ignore[arg-type]
 
 
 def test_classify_ref_branches():
@@ -79,6 +132,8 @@ def test_classify_ref_branches():
         "feat/manifest-engine",
     )
     assert classify_ref("release/v1.0") == (RefType.BRANCH, "release/v1.0")
+    assert classify_ref("custom-adhoc-branch") == (RefType.BRANCH, "custom-adhoc-branch")
+
 
 
 def test_classify_ref_tags():

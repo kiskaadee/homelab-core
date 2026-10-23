@@ -230,3 +230,23 @@ def test_inspect_workload_two_axis(tmp_path: Path):
         )
         assert status_fetch.provenance.status == ProvenanceStatus.SYNCED
         mock_resolve.assert_called_once()
+
+
+def test_resolve_upstream_provenance_class_b_and_default_timeout():
+    # 1. Class B workload (source is None)
+    prov_class_b = resolve_upstream_provenance(None)
+    assert prov_class_b.status == ProvenanceStatus.IMAGE_ONLY
+    assert prov_class_b.message == "Class B workload deploys prebuilt container images directly"
+
+    # 2. Default timeout (10.0s) verification
+    source = SourceConfig(
+        url="https://git.example.com/operator/app.git",
+        ref="main",
+        ref_type=RefType.BRANCH,
+        transport=TransportScheme.HTTPS,
+    )
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="abc1234567890abcdef1234567890abcdef12345\trefs/heads/main\n")
+        prov = resolve_upstream_provenance(source, local_commit="abc1234")
+        assert prov.status == ProvenanceStatus.SYNCED
+        assert mock_run.call_args[1]["timeout"] == 10.0

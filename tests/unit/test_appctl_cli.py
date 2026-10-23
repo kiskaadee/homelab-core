@@ -184,6 +184,135 @@ def test_cli_format_response_renders_workload_get_info():
     assert "✨ Retrieved metadata" not in rendered
 
 
+def test_cli_format_response_renders_empty_workload_list():
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_list_empty",
+        operation=OperationType.WORKLOAD_LIST,
+        result={"total": 0, "workloads": []},
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert rendered == "ℹ️  No workloads found."
+
+
+def test_cli_format_response_renders_core_service_and_rich_metadata():
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_get_core",
+        operation=OperationType.WORKLOAD_GET,
+        target="traefik",
+        result={
+            "workload": {
+                "name": "traefik",
+                "type": "core_service",
+                "dir_path": "/home/operator/Core",
+                "domain": "traefik.example.test",
+                "container": "traefik-proxy",
+                "description": "Edge Ingress",
+                "aliases": ["edge"],
+                "networks": ["proxy-net", "internal"],
+                "auth": False,
+                "visible": False,
+                "source": {
+                    "url": "https://git.example.com/repo.git",
+                    "ref": "main",
+                },
+                "manifest_error": "Syntax error in app.yaml",
+                "ssl": {
+                    "status": "valid",
+                    "issuer": "Let's Encrypt",
+                    "formatted_expiry": "2027-01-01",
+                },
+            },
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert "ℹ️  Core Infrastructure Service: traefik" in rendered
+    assert "Container:       traefik-proxy" in rendered
+    assert "Aliases:         edge" in rendered
+    assert "Networks:        proxy-net, internal" in rendered
+    assert "Auth Protected:  False" in rendered
+    assert "Dashboard:       Hidden" in rendered
+    assert "Source URL:      https://git.example.com/repo.git" in rendered
+    assert "Target Ref:      main" in rendered
+    assert "⚠️  Manifest Validation Error:" in rendered
+    assert "Syntax error in app.yaml" in rendered
+    assert "🔒 SSL/TLS Certificate:" in rendered
+    assert "Status:        valid" in rendered
+
+
+def test_cli_format_response_renders_ssl_info():
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_ssl_01",
+        operation=OperationType.PLATFORM_SSL,
+        result={
+            "ssl": {
+                "domain": "app.example.test",
+                "status": "valid",
+                "issuer": "Let's Encrypt Authority X3",
+                "subject": "CN=app.example.test",
+                "not_after": "2027-01-01 00:00:00 GMT",
+                "days_remaining": 75,
+                "formatted_expiry": "in 75 days",
+                "error": "Near expiration warning",
+            }
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert "🔒 SSL/TLS Certificate: app.example.test" in rendered
+    assert "Domain:          app.example.test" in rendered
+    assert "Status:          valid" in rendered
+    assert "Issuer:          Let's Encrypt Authority X3" in rendered
+    assert "Subject:         CN=app.example.test" in rendered
+    assert "Expiration:      2027-01-01 00:00:00 GMT" in rendered
+    assert "Days Remaining:  75 days (in 75 days)" in rendered
+    assert "Details/Error:   Near expiration warning" in rendered
+
+
+def test_cli_format_response_renders_workload_resolve_json():
+    import json
+    workload_data = {"name": "app1", "dir": "/sites/app1"}
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_resolve_01",
+        operation=OperationType.WORKLOAD_RESOLVE,
+        result={"workload": workload_data},
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert json.loads(rendered) == workload_data
+
+
+def test_cli_format_response_error_without_error_payload():
+    from unittest.mock import MagicMock
+    resp = MagicMock(spec=OperationResponse)
+    resp.success = False
+    resp.error = None
+    rendered = format_response(resp, raw_json=False)
+    assert rendered == "❌ Error: Unknown error"
+
+
+
+def test_cli_format_response_default_success_message():
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_succ",
+        operation=OperationType.PLATFORM_HEALTH,
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert rendered == "✨ Operation 'platform.health' succeeded."
+
+
+
 def test_appctl_wrapper_fast_paths_completion_when_socket_exists(tmp_path: Path, monkeypatch):
     """Ensure scripts/appctl executes `complete` and `completion` via appctl_engine.py even when socket exists."""
     import os
@@ -205,6 +334,9 @@ def test_appctl_wrapper_fast_paths_completion_when_socket_exists(tmp_path: Path,
             "APPCTL_SOCKET_PATH": str(sock_path),
             "SITES_DIR": str(tmp_path),
         }
+        if "PYTHONPATH" in os.environ:
+            env["PYTHONPATH"] = os.environ["PYTHONPATH"]
+
         res_comp = subprocess.run(
             [bash_bin, str(appctl_script), "completion", "bash"],
             env=env,

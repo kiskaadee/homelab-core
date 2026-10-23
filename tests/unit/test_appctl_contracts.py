@@ -493,16 +493,23 @@ def test_sanitize_validation_error_strips_input_and_url():
     assert op_err.code == ErrorCode.ERR_VALIDATION_FAILED
     assert op_err.message == "Request payload validation failed"
     assert op_err.details is not None
-    assert len(op_err.details) > 0
+    assert len(op_err.details) == 1
+    detail = op_err.details[0]
 
     # Ensure neither input nor url appears in any details dictionary
-    for detail in op_err.details:
-        assert "input" not in detail
-        assert "url" not in detail
-        assert "SUPER_SECRET_TOKEN_DO_NOT_LEAK" not in str(detail)
-        assert "loc" in detail
-        assert "msg" in detail
-        assert "type" in detail
+    assert "input" not in detail
+    assert "url" not in detail
+    assert "SUPER_SECRET_TOKEN_DO_NOT_LEAK" not in str(detail)
+    assert detail["loc"] == ["tail"]
+    assert detail["type"] == "int_type"
+    assert "Input should be a valid integer" in detail["msg"]
+
+    # Verify defense-in-depth: exc.errors called with include_input=False and include_url=False
+    from unittest.mock import MagicMock
+    mock_exc = MagicMock(spec=ValidationError)
+    mock_exc.errors.return_value = [{"loc": ("field",), "type": "value_error", "msg": "Invalid"}]
+    sanitize_validation_error(mock_exc)
+    mock_exc.errors.assert_called_once_with(include_input=False, include_url=False)
 
 
 # ---------------------------------------------------------------------------
