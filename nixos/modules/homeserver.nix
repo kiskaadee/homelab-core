@@ -28,7 +28,10 @@
     };
   };
 
-  config = {
+  config = let
+    domainParts = lib.splitString "." config.homelab.domain;
+    ldapBaseDn = lib.concatStringsSep "," (map (part: "dc=${part}") domainParts);
+  in {
     # Define the keys to decrypt from secrets.yaml
     sops.secrets = (lib.genAttrs [
       "dynu/api_key"
@@ -62,6 +65,7 @@
     owner = config.homelab.operatorUser;
     content = lib.generators.toKeyValue {} {
       DOMAIN = config.homelab.domain;
+      LLDAP_LDAP_BASE_DN = ldapBaseDn;
       DOCKER_API_VERSION = "1.40";
       DYNU_API_KEY = config.sops.placeholder."dynu/api_key";
       ACME_EMAIL = config.sops.placeholder."traefik/acme_email";
@@ -241,9 +245,9 @@
     # POSIX ACLs granting homelab-appctl traverse and access to operator sites & homepage config
     "a+ /home/${config.homelab.operatorUser} - - - - u:homelab-appctl:x"
     "a+ ${config.homelab.coreDir} - - - - u:homelab-appctl:x"
-    "a+ ${config.homelab.sitesDir} - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
-    "a+ /home/${config.homelab.operatorUser}/var/lib/homelab - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
-    "a+ ${config.homelab.coreDir}/config/homepage - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
+    "A+ ${config.homelab.sitesDir} - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
+    "A+ /home/${config.homelab.operatorUser}/var/lib/homelab - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
+    "A+ ${config.homelab.coreDir}/config/homepage - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"
   ];
 
     # Open ports in the firewall for Traefik, Gitea SSH, GitOps Webhook Receiver, and Mail (SMTP, Submission, SMTPS, IMAPS, ManageSieve)

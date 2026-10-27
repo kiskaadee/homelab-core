@@ -194,6 +194,7 @@ def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests(
         CORE_ROOT / "SECURITY.md",
         CORE_ROOT / "flake.nix",
         CORE_ROOT / "docker-compose.yml",
+        CORE_ROOT / "nixos" / "configuration.nix",
     ]
     violations = []
 
@@ -218,3 +219,60 @@ def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests(
     assert not violations, "Platform genericism violations detected:\n" + "\n".join(
         violations
     )
+
+
+def test_docker_compose_authelia_and_lldap_base_dn():
+    """Ensure both lldap and authelia services receive LLDAP_LDAP_BASE_DN in docker-compose.yml."""
+    compose_path = CORE_ROOT / "docker-compose.yml"
+    with open(compose_path, encoding="utf-8") as f:
+        compose = yaml.safe_load(f)
+
+    services = compose.get("services", {})
+    assert "lldap" in services, "lldap service must exist in docker-compose.yml"
+    assert "authelia" in services, "authelia service must exist in docker-compose.yml"
+
+    def get_env_map(svc_def: dict) -> dict[str, str]:
+        env_items = svc_def.get("environment", [])
+        res = {}
+        for item in env_items:
+            if isinstance(item, str) and "=" in item:
+                k, v = item.split("=", 1)
+                res[k.strip()] = v.strip()
+        return res
+
+    lldap_env = get_env_map(services["lldap"])
+    authelia_env = get_env_map(services["authelia"])
+
+    assert "LLDAP_LDAP_BASE_DN" in lldap_env, (
+        "LLDAP_LDAP_BASE_DN must be declared in lldap environment"
+    )
+    assert "LLDAP_LDAP_BASE_DN" in authelia_env, (
+        "LLDAP_LDAP_BASE_DN must be passed to authelia environment for LDAP template expansion"
+    )
+
+
+def test_nixos_homeserver_env_template_defines_dynamic_base_dn():
+    """Ensure homeserver.nix derives LLDAP_LDAP_BASE_DN dynamically from homelab.domain."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    assert "LLDAP_LDAP_BASE_DN" in content, (
+        "homeserver.nix must define LLDAP_LDAP_BASE_DN in homeserver.env template"
+    )
+    assert 'lib.splitString "."' in content or "splitString" in content, (
+        "homeserver.nix must compute LDAP base DN dynamically from domain components"
+    )
+
+
+def test_nixos_tmpfiles_rules_use_recursive_acls():
+    """Ensure tmpfiles.rules uses uppercase A+ for recursive ACL inheritance on sites and homepage."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    assert '"A+ ${config.homelab.sitesDir}' in content, (
+        "tmpfiles.rules must use uppercase 'A+' for recursive ACL inheritance on sitesDir"
+    )
+    assert '"A+ ${config.homelab.coreDir}/config/homepage' in content, (
+        "tmpfiles.rules must use uppercase 'A+' for recursive ACL inheritance on homepage config"
+    )
+

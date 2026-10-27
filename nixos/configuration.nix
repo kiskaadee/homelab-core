@@ -15,7 +15,15 @@
   ];
 
   # ── Homelab platform settings ────────────────────────────────────────────────
-  homelab.operatorUser = "kiskaadee";
+  homelab.operatorUser = "operator";
+
+  # ── Host Git Safe Directory ──────────────────────────────────────────────────
+  programs.git = {
+    enable = true;
+    config.safe.directory = [
+      "/home/${config.homelab.operatorUser}/Sites/*"
+    ];
+  };
 
   # ── SOPS secrets configuration ──────────────────────────────────────────────
   # Set once here to avoid duplicate-option conflicts across submodules
@@ -57,8 +65,9 @@
   networking.networkmanager.enable = true;
 
   # ── User account ─────────────────────────────────────────────────────────────
-  users.users.kiskaadee = {
+  users.users.${config.homelab.operatorUser} = {
     isNormalUser = true;
+    description = "Primary server administrator";
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICAVPPMk+WApUd/fo78+lsRGnLKSlY4GDZiNGKwBAifD"
     ];
