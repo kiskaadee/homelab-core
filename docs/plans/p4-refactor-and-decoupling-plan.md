@@ -52,17 +52,18 @@ This plan establishes the concrete implementation work packages to resolve these
 ## 3. Work Breakdown Structure (WBS)
 
 ### Phase 1: Host Configuration & Identity Migration
-- [ ] **Task 1.1**: Update `nixos/configuration.nix` to declare user `operator` and configure `homelab.operatorUser = "operator"` and `homelab.domain` with the configured production domain.
-- [ ] **Task 1.2**: Declare `programs.git.config.safe.directory = [ "/home/operator/Sites/*" ]` in `nixos/configuration.nix`.
-- [ ] **Task 1.3**: Derive `LLDAP_LDAP_BASE_DN` dynamically from `config.homelab.domain` in `nixos/modules/homeserver.nix` and pass it to `sops.templates."homeserver.env"`.
-- [ ] **Task 1.4**: Update `docker-compose.yml` to consume `LLDAP_LDAP_BASE_DN` from `homeserver.env`.
-- [ ] **Task 1.5**: Update `systemd.tmpfiles.rules` in `nixos/modules/homeserver.nix` from `a+` to recursive `A+` on `sitesDir`.
+- [x] **Task 1.1**: Update `nixos/configuration.nix` to declare user `operator` and configure `homelab.operatorUser = "operator"` and `homelab.domain` with the configured production domain.
+- [x] **Task 1.2**: Declare `programs.git.config.safe.directory = [ "/home/operator/Sites/*" ]` in `nixos/configuration.nix`.
+- [x] **Task 1.3**: Derive `LLDAP_LDAP_BASE_DN` dynamically from `config.homelab.domain` in `nixos/modules/homeserver.nix` and pass it to `sops.templates."homeserver.env"`.
+- [x] **Task 1.4**: Update `docker-compose.yml` to consume `LLDAP_LDAP_BASE_DN` from `homeserver.env`.
+- [x] **Task 1.5**: Update `systemd.tmpfiles.rules` in `nixos/modules/homeserver.nix` from `a+` to recursive `A+` on `sitesDir`.
 
 ### Phase 2: CLI Hardening & Status Parity
 - [ ] **Task 2.1**: Update `scripts/appctl` to fail closed when `[ ! -S "$SOCKET_PATH" ]`, removing the silent fallback to legacy Bash.
 - [ ] **Task 2.2**: Update `_op_workload_list` in `scripts/appctl_router.py` to query live container health (`get_docker_status()`).
 - [ ] **Task 2.3**: Update `_format_workload_table` in `scripts/appctl_cli.py` to render the `STATUS` column (`🟢 Running (1)` / `🔴 Stopped`).
 - [ ] **Task 2.4**: Bootstrap operator admin token documentation and setup instructions in `docs/appctl.md` and `docs/secrets-and-state.md`.
+- [ ] **Task 2.5**: Wire `--build` and `--no-cache` in `scripts/appctl_cli.py`, pass `--pull` during `compose_build` in `scripts/appctl_router.py`, and document source-built action policy in `docs/appctl.md`.
 
 ### Phase 3: Architectural Records & Roadmap Synchronization
 - [x] **Task 3.1**: Update `ROADMAP.md` (P6 redefined as Homelab MCP Gateway; on-server AI compiler deprecated).
