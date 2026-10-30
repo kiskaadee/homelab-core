@@ -419,3 +419,55 @@ def test_gitignore_includes_instance_nix():
     )
 
 
+def test_nixos_switch_alias_uses_path_and_impure():
+    """Ensure nix-switch alias in nixos/modules/shell.nix uses path: and --impure to prevent silent fail-open."""
+    shell_nix = CORE_ROOT / "nixos" / "modules" / "shell.nix"
+    content = shell_nix.read_text(encoding="utf-8")
+    assert 'nix-switch = "sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure";' in content, (
+        "nixos/modules/shell.nix must configure nix-switch alias with path:$HOME/Core#server --impure"
+    )
+
+
+def test_nixos_safe_directory_includes_core_and_sites():
+    """Ensure programs.git.config.safe.directory includes Core and Sites to prevent dubious ownership errors."""
+    config_nix = CORE_ROOT / "nixos" / "configuration.nix"
+    content = config_nix.read_text(encoding="utf-8")
+    assert '"/home/${config.homelab.operatorUser}/Core"' in content, (
+        "nixos/configuration.nix must include Core in git safe.directory"
+    )
+    assert '"/home/${config.homelab.operatorUser}/Sites/*"' in content, (
+        "nixos/configuration.nix must include Sites/* in git safe.directory"
+    )
+
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        cmd = [
+            nix_bin,
+            "eval",
+            ".#nixosConfigurations.server.config.programs.git.config",
+            "--json",
+        ]
+        res = subprocess.run(
+            cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+        )
+        import json
+
+        configs = json.loads(res.stdout)
+        safe_dirs = []
+        for cfg in configs:
+            if isinstance(cfg, dict) and "safe" in cfg and "directory" in cfg["safe"]:
+                dirs = cfg["safe"]["directory"]
+                if isinstance(dirs, list):
+                    safe_dirs.extend(dirs)
+                else:
+                    safe_dirs.append(dirs)
+
+        assert "/home/operator/Core" in safe_dirs, (
+            f"Expected '/home/operator/Core' in git safe.directory, got {safe_dirs}"
+        )
+        assert "/home/operator/Sites/*" in safe_dirs, (
+            f"Expected '/home/operator/Sites/*' in git safe.directory, got {safe_dirs}"
+        )
+
+
+

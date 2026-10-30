@@ -62,8 +62,8 @@
       reload     = "exec bash";
       pgoog      = "ping google.com -c 3";
       wifi       = "nmtui";
-      # NixOS rebuild targeting this flake
-      nix-switch = "sudo nixos-rebuild switch --flake ~/Core#server";
+      # NixOS rebuild targeting this flake (path scheme + impure required for instance.nix)
+      nix-switch = "sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure";
     };
 
     interactiveShellInit = ''
