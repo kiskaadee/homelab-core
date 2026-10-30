@@ -59,11 +59,11 @@ This plan establishes the concrete implementation work packages to resolve these
 - [x] **Task 1.5**: Update `systemd.tmpfiles.rules` in `nixos/modules/homeserver.nix` from `a+` to recursive `A+` on `sitesDir`.
 
 ### Phase 2: CLI Hardening & Status Parity
-- [ ] **Task 2.1**: Update `scripts/appctl` to fail closed when `[ ! -S "$SOCKET_PATH" ]`, removing the silent fallback to legacy Bash.
-- [ ] **Task 2.2**: Update `_op_workload_list` in `scripts/appctl_router.py` to query live container health (`get_docker_status()`).
-- [ ] **Task 2.3**: Update `_format_workload_table` in `scripts/appctl_cli.py` to render the `STATUS` column (`🟢 Running (1)` / `🔴 Stopped`).
-- [ ] **Task 2.4**: Bootstrap operator admin token documentation and setup instructions in `docs/appctl.md` and `docs/secrets-and-state.md`.
-- [ ] **Task 2.5**: Wire `--build` and `--no-cache` in `scripts/appctl_cli.py`, pass `--pull` during `compose_build` in `scripts/appctl_router.py`, and document source-built action policy in `docs/appctl.md`.
+- [x] **Task 2.1**: Update `scripts/appctl` to fail closed when `[ ! -S "$SOCKET_PATH" ]`, removing the silent fallback to legacy Bash.
+- [x] **Task 2.2**: Update `_op_workload_list` in `scripts/appctl_router.py` to query live container health (`get_docker_status()`).
+- [x] **Task 2.3**: Update `_format_workload_table` in `scripts/appctl_cli.py` to render the `STATUS` column (`🟢 Running (1)` / `🔴 Stopped`).
+- [x] **Task 2.4**: Bootstrap operator admin token documentation and setup instructions in `docs/appctl.md` and `docs/secrets-and-state.md`.
+- [x] **Task 2.5**: Wire `--build` and `--no-cache` in `scripts/appctl_cli.py`, pass `--pull` during `compose_build` in `scripts/appctl_router.py`, and document source-built action policy in `docs/appctl.md`.
 
 ### Phase 3: Architectural Records & Roadmap Synchronization
 - [x] **Task 3.1**: Update `ROADMAP.md` (P6 redefined as Homelab MCP Gateway; on-server AI compiler deprecated).

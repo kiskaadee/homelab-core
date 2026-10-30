@@ -47,6 +47,98 @@ Under Milestone P4, `appctl` operates as a centralized operational control plane
             └────────────────────────────────────────────────┘
 ```
 
+### Operator Admin Token Bootstrapping & Rotation
+
+`appctl` implements zero-trust authorization across three roles: `homelab-admin`, `homelab-operator`, and `homelab-viewer`. Local Unix domain socket (`/run/homelab/appctl.sock`) callers without a token are granted `homelab-viewer` privileges via `SO_PEERCRED` for non-sensitive read-only commands (e.g., `appctl list`, `appctl status`, `appctl ssl`).
+
+Sensitive inspection (e.g., `appctl config <workload>` which renders secrets in Compose definitions) and all mutating operations (e.g., `appctl up`, `appctl restart`, `appctl update`) require an authenticated Bearer token.
+
+#### Role of `~/.config/homelab/token`
+The thin CLI client resolves Bearer tokens in the following order of precedence:
+1. Direct CLI flag: `--token <secret>`
+2. Environment variable: `APPCTL_TOKEN`
+3. Local operator token file: `~/.config/homelab/token` (mode `0600`)
+4. System service token file: `/run/secrets/appctl/token`
+
+The standard operator setup stores a 256-bit hex Bearer token with mode `0600` in `~/.config/homelab/token`.
+
+#### Generating a Token (`scripts/bootstrap_token.py`)
+To generate an operator token and its matching SHA-256 descriptor:
+
+```bash
+python3 scripts/bootstrap_token.py
+```
+
+This utility:
+1. Generates a cryptographically secure 256-bit token (`secrets.token_hex(32)`).
+2. Computes the SHA-256 digest: `hashlib.sha256(raw_token.encode("utf-8")).hexdigest()`.
+3. Ensures `~/.config/homelab` exists with mode `0700`.
+4. Writes the raw Bearer token to `~/.config/homelab/token` with mode `0600`.
+5. Outputs the JSON descriptor matching `TokenDescriptor` in `scripts/appctl_auth.py`:
+
+```json
+{
+  "token_id": "operator-admin",
+  "identity": "operator",
+  "role": "homelab-admin",
+  "sha256": "4a12...<64-hex-sha256>"
+}
+```
+
+> [!NOTE]
+> The raw secret is **never** printed to stdout or stderr. Only the descriptor snippet (containing the SHA-256 digest) is output. To print only the JSON snippet for automation or piping, pass `--print-json`.
+
+#### Registering the Descriptor in SOPS
+Insert the generated JSON descriptor into your encrypted SOPS secrets store (`nixos/secrets.yaml`):
+
+```bash
+sops nixos/secrets.yaml
+```
+
+Under `appctl.tokens_json`, add the entry to the JSON list:
+```yaml
+appctl:
+  tokens_json: |
+    [
+      {
+        "token_id": "operator-admin",
+        "identity": "operator",
+        "role": "homelab-admin",
+        "sha256": "<64-hex-sha256>"
+      }
+    ]
+```
+
+Save and exit your editor (SOPS will re-encrypt the file), then project the updated secrets:
+```bash
+sudo nixos-rebuild switch --flake ~/Core#server
+```
+This updates `/run/secrets/appctl/tokens.json` (owned by `homelab-appctl:homelab-operators`, mode `0400`), which `homelab-appctl.service` consumes.
+
+#### Verifying Token Authentication
+Verify permissions using both unauthenticated and authenticated queries:
+
+1. **Viewer Inspection** (succeeds without token via `SO_PEERCRED`):
+   ```bash
+   appctl health
+   # Output: OK (homelab-appctl.service operational)
+   ```
+
+2. **Admin-Gated Operation** (requires `homelab-admin` Bearer token):
+   ```bash
+   appctl config docs
+   # Renders the resolved Compose YAML with injected secrets
+   ```
+   If the token is missing or mismatched, `appctl` returns `401 Unauthorized` or `403 Forbidden` with `ERR_PERMISSION_DENIED`.
+
+#### Token Rotation Workflow
+To rotate an operator token:
+1. Run `python3 scripts/bootstrap_token.py --force --token-id "operator-admin-$(date +%Y%m%d)"`.
+2. Open `sops nixos/secrets.yaml` and add the new descriptor to `appctl.tokens_json`. Keep the old entry temporarily if multiple sessions share it, or replace it immediately.
+3. Run `sudo nixos-rebuild switch --flake ~/Core#server` to apply the updated token store.
+4. Verify CLI operations (`appctl config docs`).
+5. Remove the deprecated token descriptor from `nixos/secrets.yaml` and re-run `nixos-rebuild switch`.
+
 ---
 
 ## 2. CLI Command Reference
