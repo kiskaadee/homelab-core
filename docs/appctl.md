@@ -101,11 +101,13 @@ appctl info docs --ssl
 
 ### Lifecycle Management
 
-#### `appctl up <service|core>`
+#### `appctl up <service|core> [--build] [--no-cache]`
 Starts the specified service stack in detached mode (`--remove-orphans`).
 * For a workload in `~/Sites`: starts containers and triggers `appctl sync`.
 * For `core`: starts the entire Core Compose stack using `/run/secrets/homeserver.env`.
 * For an individual Core service (e.g., `appctl up traefik`): starts that specific container.
+* When `--build` is passed: invokes `docker compose build --pull` prior to deployment. The `--pull` flag guarantees base images in Dockerfile `FROM` lines are refreshed from remote registries.
+* When `--no-cache` is passed: `--build` is implied (`build: True`) and `docker compose build --pull --no-cache` is executed, forcing a clean rebuild without cached layers.
 
 #### `appctl down <service|core>`
 Stops and removes containers defined in the target's Compose file (or stops the targeted Core container).
@@ -116,13 +118,21 @@ Restarts the target stack or individual container:
 * `appctl restart core`: Restarts all Core Compose services.
 * `appctl restart traefik`: Restarts only the Traefik container.
 
-#### `appctl update <service>`
-Performs a sequential update workflow for a Sites workload stack:
+#### `appctl update <service> [--branch <branch>] [--build] [--no-cache]`
+Performs a sequential, revision-consistent update workflow for a Sites workload stack:
 1. Verifies that the local Git working tree is clean (aborts if uncommitted changes exist).
-2. Runs `git pull --ff-only` to fast-forward the current branch.
-3. Runs `docker compose pull` to fetch updated container images.
-4. Runs `docker compose up -d --remove-orphans` to recreate containers.
+2. Runs `git pull --ff-only [origin <expected_branch>]` to fast-forward the current branch.
+3. Re-validates `app.yaml`, expected branch declaration, and Compose security rules against the newly pulled working tree.
+4. Executes declared actions in `app.yaml` (`actions: [git_pull, compose_pull, compose_build, compose_up, compose_restart]`):
+   * `compose_pull`: Runs `docker compose pull` to fetch updated container images.
+   * `compose_build`: Runs `docker compose build --pull` (and `--no-cache` if requested).
+   * `compose_up`: Runs `docker compose up -d --remove-orphans` to recreate containers.
+   * When `--build` is passed via CLI, `compose_build` is automatically executed prior to `compose_up`, even if omitted from manifest actions.
+   * When `--no-cache` is passed, build is implied and executes with `--no-cache`.
 5. Runs `appctl sync` to update the Homepage dashboard.
+
+> [!NOTE]
+> **Source-Built Workload Policy**: For workloads built directly from local source Dockerfiles rather than pre-built registry images, declare `compose_build` in `app.yaml` `deployment.actions` (`actions: [git_pull, compose_build, compose_up]`). Both manual `appctl update` and automated GitOps dispatcher runs will execute `docker compose build --pull` before recreating containers, ensuring reproducible builds with current upstream base layers.
 
 > [!NOTE]
 > Core platform updates are managed via version-controlled NixOS generations (`git pull` followed by `nixos-rebuild switch`), not through `appctl update core` (as Core is mounted read-only for `homelab-appctl.service`).
