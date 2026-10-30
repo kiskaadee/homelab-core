@@ -4,11 +4,14 @@ Security invariant tests for Docker Compose and container isolation.
 
 import os
 import shutil
-import subprocess
-import sys
 from pathlib import Path
 
 import yaml
+from appctl_audit import AuditLogger, TargetLockManager
+from appctl_auth import Principal, Role
+from appctl_contracts import OperationRequest
+from appctl_router import OperationalRouter, assemble_workload_env
+from core_manifest import parse_manifest
 
 # Comment-out reason: testing pyproject-level pythonpath definition
 CORE_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -101,10 +104,9 @@ def test_no_eval_in_appctl_script():
     assert "eval " not in content, "Dangerous 'eval' detected in scripts/appctl!"
 
 
-def test_appctl_env_injection_resilience(tmp_path: Path):
+def test_appctl_env_injection_resilience(tmp_path: Path, monkeypatch):
     """Ensure environment values from app.yaml cannot execute shell commands via command substitution
-
-    in scripts/appctl during environment setup. Executes scripts/appctl directly with a mock docker binary.
+    during P4 production environment assembly and router dispatch. Executes OperationalRouter with a mock docker binary.
     """
     canary = tmp_path / "pwned.txt"
     payload = f"$(touch {canary})"
@@ -127,14 +129,22 @@ env:
         "services:\n  web:\n    image: nginx\n", encoding="utf-8"
     )
 
-    # 2. Setup mock docker binary to capture environment without requiring a running Docker daemon
+    # 2. Verify unit-level pure Python environment assembly
+    monkeypatch.setenv("HOMELAB_DOMAIN", "example.test")
+    manifest = parse_manifest(app_dir / "app.yaml")
+    assembled_env = assemble_workload_env(app_dir, manifest, "vuln-app")
+    assert not canary.exists(), "Command substitution executed during assemble_workload_env!"
+    assert assembled_env["INJECTION_TEST"] == payload
+    assert assembled_env["NORMAL_VAR"] == "safe_value"
+
+    # 3. Setup mock docker binary to capture environment without requiring a running Docker daemon
     mock_bin = tmp_path / "bin"
     mock_bin.mkdir()
     mock_docker = mock_bin / "docker"
     bash_bin = shutil.which("bash") or "bash"
 
     mock_docker_script = f"""#!{bash_bin}
-if [ "$1" = "compose" ] && [ "$2" = "config" ]; then
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then
   echo "MOCK_DOCKER_COMPOSE_CONFIG"
   echo "CAPTURED_INJECTION=$INJECTION_TEST"
   echo "CAPTURED_NORMAL=$NORMAL_VAR"
@@ -145,36 +155,39 @@ exit 0
     mock_docker.write_text(mock_docker_script, encoding="utf-8")
     mock_docker.chmod(0o755)
 
-    # 3. Execute scripts/appctl config vuln-app directly
-    appctl_path = CORE_ROOT / "scripts" / "appctl"
-    env = os.environ.copy()
-    if "NIX_PYTHONPATH" in env and "PYTHONPATH" not in env:
-        env["PYTHONPATH"] = env["NIX_PYTHONPATH"]
-    env["PATH"] = f"{mock_bin}:{Path(sys.executable).parent}:{env['PATH']}"
-    env["PYTHON_BIN"] = sys.executable
-    env["SITES_DIR"] = str(sites_dir)
-    env["HOMELAB_DOMAIN"] = "example.test"
-    env["CORE_DIR"] = str(CORE_ROOT)
-
-    res = subprocess.run(
-        [bash_bin, str(appctl_path), "config", "vuln-app"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+    # 4. Dispatch workload.config through OperationalRouter
+    monkeypatch.setenv("PATH", f"{mock_bin}:{os.environ.get('PATH', '')}")
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=sites_dir,
+        core_dir=CORE_ROOT,
+    )
+    req = OperationRequest.model_validate({
+        "operation": "workload.config",
+        "target": "vuln-app",
+    })
+    admin_principal = Principal(
+        identity="operator",
+        role=Role.ADMIN,
+        token_id="tok_admin",
+        auth_method="bearer_token",
     )
 
-    # 4. Assertions: command substitution was not executed, script ran, and mock docker received literal value
+    resp = router.dispatch(req, admin_principal)
+
+    # 5. Assertions: command substitution was not executed, router succeeded, mock docker received literal value
     assert not canary.exists(), (
         "Command substitution was executed on the host during environment setup!"
     )
-    assert res.returncode == 0, (
-        f"appctl config failed: {res.stderr}\nStdout: {res.stdout}"
+    assert resp.success is True, (
+        f"OperationalRouter dispatch failed: {resp.error}"
     )
-    assert "MOCK_DOCKER_COMPOSE_CONFIG" in res.stdout
-    assert f"CAPTURED_INJECTION={payload}" in res.stdout
-    assert "CAPTURED_NORMAL=safe_value" in res.stdout
-    assert "/dangerous/override" not in res.stdout
+    assert resp.result is not None
+    output = resp.result.get("output", "")
+    assert "MOCK_DOCKER_COMPOSE_CONFIG" in output
+    assert f"CAPTURED_INJECTION={payload}" in output
+    assert "CAPTURED_NORMAL=safe_value" in output
 
 
 def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests():

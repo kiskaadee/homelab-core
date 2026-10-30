@@ -1,189 +1,26 @@
 #!/usr/bin/env bash
 
 # appctl - Unified, Manifest-Driven Container Orchestrator
-# Discovers individual application repositories located in ~/Sites/*/
-# Injects global homelab secrets, per-app metadata from app.yaml, and monitors Git sync
+# Thin CLI wrapper delegating operational commands to homelab-appctl.service over UDS
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENGINE="$SCRIPT_DIR/appctl_engine.py"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [ -z "$PYTHON_BIN" ]; then
+  if [ -x "$SCRIPT_DIR/../.venv/bin/python3" ]; then
+    PYTHON_BIN="$SCRIPT_DIR/../.venv/bin/python3"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 SOCKET_PATH="${APPCTL_SOCKET_PATH:-/run/homelab/appctl.sock}"
 CLI_CLIENT="$SCRIPT_DIR/appctl_cli.py"
 
-# If daemon Unix domain socket exists, delegate operational commands directly to thin client
-# (fast-path local completion and resolution helpers through appctl_engine.py)
+# Fast-path local shell completion helpers
 case "${1:-}" in
-  complete|completion|resolve)
-    ;;
-  *)
-    if [ -S "$SOCKET_PATH" ] && [ -f "$CLI_CLIENT" ]; then
-      exec "$PYTHON_BIN" "$CLI_CLIENT" "$@"
-    fi
-    ;;
-esac
-
-ENV_FILE="/run/secrets/rendered/traefik-deployments.env"
-if [ ! -f "$ENV_FILE" ] && [ -f "/run/secrets/traefik-deployments.env" ]; then
-  ENV_FILE="/run/secrets/traefik-deployments.env"
-fi
-export SITES_DIR="${SITES_DIR:-$HOME/Sites}"
-export CORE_DIR="${CORE_DIR:-$HOME/Core}"
-export ENV_FILE
-
-# Source global secrets/environment if available
-HOMESERVER_ENV="/run/secrets/rendered/homeserver.env"
-if [ ! -f "$HOMESERVER_ENV" ] && [ -f "/run/secrets/homeserver.env" ]; then
-  HOMESERVER_ENV="/run/secrets/homeserver.env"
-fi
-if [ -f "$HOMESERVER_ENV" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$HOMESERVER_ENV"
-  set +a
-fi
-
-if [ -f "$ENV_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
-  set +a
-fi
-
-# Lock the homelab root domain before setup_app_env can mutate $DOMAIN
-# Canonical precedence: HOMELAB_DOMAIN -> DOMAIN_SUFFIX -> DOMAIN
-export HOMELAB_DOMAIN="${HOMELAB_DOMAIN:-${DOMAIN_SUFFIX:-${DOMAIN:-}}}"
-
-# Show help usage
-show_help() {
-  echo "🚀 appctl - Homelab Container Orchestrator"
-  echo ""
-  echo "Usage: appctl <command> [service] [options...]"
-  echo ""
-  echo "Commands:"
-  echo "  list, status [--fetch] [--core] [--ssl]  List all applications with Git sync & container status"
-  echo "  ssl [service]                            Inspect SSL/TLS certificates across homelab domains"
-  echo "  info <service> [--ssl]                   Display comprehensive application & Git diagnostics"
-  echo "  up <service|core>                        Start/build a service stack or Core component"
-  echo "  down <service|core>                      Stop and remove a service stack or Core component"
-  echo "  restart <service|core>                   Restart a service stack, Core component, or entire Core"
-  echo "  update <service>                         Full stack update (git pull -> compose pull -> recreate)"
-  echo "  pull <service|core>                      Pull latest images and recreate service or Core component"
-  echo "  logs <service|core>                      Stream service or Core component logs"
-  echo "  config <service|core>                    Validate and view resolved compose configuration"
-  echo "  sync                                     Synchronize Homepage dashboard services.yaml from app.yaml"
-  echo "  completion [bash]                        Output shell autocompletion script"
-}
-
-# Setup application environment based on resolved metadata
-setup_app_env() {
-  local query="$1"
-  local resolved_json
-  resolved_json=$("$PYTHON_BIN" "$ENGINE" resolve "$query" || true)
-
-  if [ -z "$resolved_json" ]; then
-    echo "❌ Error: Service '$query' not found under $SITES_DIR or Core"
-    exit 1
-  fi
-
-  # Extract fields via python json
-  TARGET_TYPE=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('type', 'app'))" "$resolved_json")
-  APP_DIR=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d['dir_path'])" "$resolved_json")
-  CANONICAL_NAME=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d['name'])" "$resolved_json")
-  TARGET_CONTAINER=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d.get('container', ''))" "$resolved_json")
-
-  if [ "$TARGET_TYPE" = "core" ] || [ "$TARGET_TYPE" = "core_service" ]; then
-    if [ ! -d "$CORE_DIR" ]; then
-      echo "❌ Error: Core directory not found at $CORE_DIR"
-      exit 1
-    fi
-    CORE_ENV_FILE="/run/secrets/rendered/homeserver.env"
-    if [ ! -f "$CORE_ENV_FILE" ] && [ -f "/run/secrets/homeserver.env" ]; then
-      CORE_ENV_FILE="/run/secrets/homeserver.env"
-    fi
-    COMPOSE_ENV_ARG=()
-    if [ -f "$CORE_ENV_FILE" ]; then
-      COMPOSE_ENV_ARG=(--env-file "$CORE_ENV_FILE")
-    fi
-    return
-  fi
-
-  RESOLVED_DOMAIN=$("$PYTHON_BIN" -c "import json, sys; d=json.loads(sys.argv[1]); print(d['domain'])" "$resolved_json")
-
-  # 1. Base infrastructure defaults
-  export PROXY_NETWORK="${PROXY_NETWORK:-proxy-net}"
-  export NETWORK_NAME="${NETWORK_NAME:-$PROXY_NETWORK}"
-  export CERT_RESOLVER="${CERT_RESOLVER:-myresolver}"
-  export DOMAIN_SUFFIX="${DOMAIN_SUFFIX:-$HOMELAB_DOMAIN}"
-
-  # 2. Canonical application identity
-  export SERVICE_NAME="$CANONICAL_NAME"
-  export CONTAINER_NAME="$CANONICAL_NAME"
-  export SERVICE_DOMAIN="$RESOLVED_DOMAIN"
-  export DOMAIN="$RESOLVED_DOMAIN"
-
-  # 3. Dynamic environment variables from app.yaml (e.g. PROJECT_PATH, MEDIA_PATH, etc.)
-  while IFS= read -r -d '' k && IFS= read -r -d '' v; do
-    export "$k=$v"
-  done < <("$PYTHON_BIN" -c "
-import json, re, sys
-RESERVED = {'PATH', 'LD_PRELOAD', 'IFS', 'SHELL', 'USER', 'CORE_DIR', 'SITES_DIR', 'ENV_FILE', 'HOMESERVER_ENV'}
-d = json.loads(sys.argv[1])
-env_dict = d.get('env', {})
-if isinstance(env_dict, dict):
-    for k, v in env_dict.items():
-        k_str = str(k).strip()
-        if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', k_str) or k_str in RESERVED:
-            continue
-        if v is not None and v != '':
-            sys.stdout.buffer.write(k_str.encode('utf-8') + b'\0' + str(v).encode('utf-8') + b'\0')
-" "$resolved_json")
-
-  # 4. Source local .env if present
-  if [ -f "$APP_DIR/.env" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$APP_DIR/.env"
-    set +a
-  fi
-
-  # 5. Source local app.env if present
-  if [ -f "$APP_DIR/app.env" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    source "$APP_DIR/app.env"
-    set +a
-  fi
-}
-
-if [ $# -lt 1 ]; then
-  show_help
-  exit 1
-fi
-
-COMMAND=$1
-APP=$2
-
-case "$COMMAND" in
-  list|status)
-    "$PYTHON_BIN" "$ENGINE" list "${@:2}"
-    ;;
-  ssl)
-    "$PYTHON_BIN" "$ENGINE" ssl "${@:2}"
-    ;;
-  info)
-    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    "$PYTHON_BIN" "$ENGINE" info "${@:2}"
-    ;;
-  sync)
-    "$PYTHON_BIN" "$ENGINE" sync "${@:2}"
-    ;;
   complete)
-    "$PYTHON_BIN" "$ENGINE" complete "${@:2}"
-    ;;
-  resolve)
-    "$PYTHON_BIN" "$ENGINE" resolve "${@:2}"
+    exec "$PYTHON_BIN" "$ENGINE" complete "${@:2}"
     ;;
   completion)
     cat <<'EOF'
@@ -199,7 +36,7 @@ _appctl_completions() {
         cword=$COMP_CWORD
     fi
 
-    local commands="list status ssl info up down restart update pull logs config sync completion"
+    local commands="list status ssl info up down restart update pull logs config sync health resolve completion"
 
     if [ "$cword" -eq 1 ]; then
         COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
@@ -245,138 +82,13 @@ _appctl_completions() {
 }
 complete -F _appctl_completions appctl
 EOF
-    ;;
-  up)
-    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    setup_app_env "$APP"
-    if [ "$TARGET_TYPE" = "core" ]; then
-      echo "🚀 Starting Core stack ($CORE_DIR)..."
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" up -d --remove-orphans "${@:3}"
-    elif [ "$TARGET_TYPE" = "core_service" ]; then
-      echo "🚀 Starting Core service: $TARGET_CONTAINER ($CORE_DIR)..."
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" up -d --remove-orphans "$TARGET_CONTAINER" "${@:3}"
-    else
-      echo "🚀 Starting $CANONICAL_NAME ($APP_DIR)..."
-      cd "$APP_DIR" && docker compose up -d --remove-orphans "${@:3}"
-      "$PYTHON_BIN" "$ENGINE" sync >/dev/null 2>&1 || true
-    fi
-    ;;
-  down)
-    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    setup_app_env "$APP"
-    if [ "$TARGET_TYPE" = "core" ]; then
-      echo "🛑 Stopping Core stack ($CORE_DIR)..."
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" down "${@:3}"
-    elif [ "$TARGET_TYPE" = "core_service" ]; then
-      echo "🛑 Stopping Core service: $TARGET_CONTAINER ($CORE_DIR)..."
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" stop "$TARGET_CONTAINER" "${@:3}"
-    else
-      echo "🛑 Stopping $CANONICAL_NAME ($APP_DIR)..."
-      cd "$APP_DIR" && docker compose down "${@:3}"
-      "$PYTHON_BIN" "$ENGINE" sync >/dev/null 2>&1 || true
-    fi
-    ;;
-  restart)
-    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    setup_app_env "$APP"
-    if [ "$TARGET_TYPE" = "core" ]; then
-      if [ -n "$3" ] && [[ "$3" != -* ]]; then
-        echo "🔄 Restarting Core service: $3 ($CORE_DIR)..."
-        cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" restart "$3" "${@:4}"
-      else
-        echo "🔄 Restarting Core stack ($CORE_DIR)..."
-        cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" restart "${@:3}"
-      fi
-    elif [ "$TARGET_TYPE" = "core_service" ]; then
-      echo "🔄 Restarting Core service: $TARGET_CONTAINER ($CORE_DIR)..."
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" restart "$TARGET_CONTAINER" "${@:3}"
-    else
-      echo "🔄 Restarting $CANONICAL_NAME ($APP_DIR)..."
-      cd "$APP_DIR" && docker compose down && docker compose up -d "${@:3}"
-      "$PYTHON_BIN" "$ENGINE" sync >/dev/null 2>&1 || true
-    fi
-    ;;
-  update)
-    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    setup_app_env "$APP"
-    if [ "$TARGET_TYPE" = "core" ]; then
-      echo "🔄 Updating Core stack ($CORE_DIR)..."
-      if [ -d "$CORE_DIR/.git" ]; then
-        if [ -n "$(git -C "$CORE_DIR" status --porcelain)" ]; then
-          echo "❌ Error: Cannot update. Working tree in $CORE_DIR has uncommitted changes."
-          exit 1
-        fi
-        echo "📥 Pulling latest git changes for Core..."
-        git -C "$CORE_DIR" pull --ff-only
-      fi
-      echo "🐳 Pulling latest Core container images..."
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" pull
-      echo "🚀 Recreating Core container stack..."
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" up -d --remove-orphans "${@:3}"
-      echo "✨ Core successfully updated!"
-      exit 0
-    fi
-
-    echo "🔄 Updating $CANONICAL_NAME ($APP_DIR)..."
-    if [ -d "$APP_DIR/.git" ]; then
-      if [ -n "$(git -C "$APP_DIR" status --porcelain)" ]; then
-        echo "❌ Error: Cannot update. Working tree in $APP_DIR has uncommitted changes."
-        echo "Commit or stash your changes before updating."
-        exit 1
-      fi
-      echo "📥 Pulling latest git changes..."
-      git -C "$APP_DIR" pull --ff-only
-    fi
-
-    echo "🐳 Pulling latest container images..."
-    cd "$APP_DIR" && docker compose pull
-
-    echo "🚀 Recreating container stack..."
-    cd "$APP_DIR" && docker compose up -d --remove-orphans "${@:3}"
-
-    "$PYTHON_BIN" "$ENGINE" sync >/dev/null 2>&1 || true
-    echo "✨ $CANONICAL_NAME successfully updated!"
-    ;;
-  pull)
-    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    setup_app_env "$APP"
-    if [ "$TARGET_TYPE" = "core" ]; then
-      echo "📥 Pulling latest images for Core stack..."
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" pull "${@:3}"
-    elif [ "$TARGET_TYPE" = "core_service" ]; then
-      echo "📥 Pulling latest image for Core service: $TARGET_CONTAINER..."
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" pull "$TARGET_CONTAINER" "${@:3}"
-    else
-      echo "📥 Pulling latest images for $CANONICAL_NAME..."
-      cd "$APP_DIR" && docker compose pull && docker compose up -d --remove-orphans "${@:3}"
-    fi
-    ;;
-  logs)
-    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    setup_app_env "$APP"
-    if [ "$TARGET_TYPE" = "core" ]; then
-      if [ -n "$3" ] && [[ "$3" != -* ]]; then
-        cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" logs -f "$3" "${@:4}"
-      else
-        cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" logs -f "${@:3}"
-      fi
-    elif [ "$TARGET_TYPE" = "core_service" ]; then
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" logs -f "$TARGET_CONTAINER" "${@:3}"
-    else
-      cd "$APP_DIR" && docker compose logs -f "${@:3}"
-    fi
-    ;;
-  config)
-    if [ -z "$APP" ]; then echo "❌ Error: Service name required"; exit 1; fi
-    setup_app_env "$APP"
-    if [ "$TARGET_TYPE" = "core" ] || [ "$TARGET_TYPE" = "core_service" ]; then
-      cd "$CORE_DIR" && docker compose "${COMPOSE_ENV_ARG[@]}" config "${@:3}"
-    else
-      cd "$APP_DIR" && docker compose config "${@:3}"
-    fi
+    exit 0
     ;;
   *)
-    show_help
-    exit 1
+    if [ ! -S "$SOCKET_PATH" ]; then
+      echo "❌ Error: appctl daemon socket not found at $SOCKET_PATH. Ensure homelab-appctl.service is running." >&2
+      exit 1
+    fi
+    exec "$PYTHON_BIN" "$CLI_CLIENT" "$@"
     ;;
 esac

@@ -39,7 +39,7 @@ x 2026-10-23 (A) Migrate operator user from kiskaadee to operator in nixos/confi
 x 2026-10-23 (A) Derive LLDAP_LDAP_BASE_DN dynamically from homelab.domain in nixos/modules/homeserver.nix and docker-compose.yml +nixos @auth
 x 2026-10-23 (A) Change systemd.tmpfiles.rules to recursive A+ ACLs for Sites and homepage in nixos/modules/homeserver.nix +nixos @perms
 x 2026-10-23 (A) Declare global Git safe.directory for /home/operator/Sites/* in nixos/configuration.nix +nixos @git
-(B) Enforce fail-closed check on daemon socket availability and remove silent Bash fallback in scripts/appctl +cli @security
+x 2026-10-30 (B) Enforce fail-closed check on daemon socket availability and remove silent Bash fallback in scripts/appctl +cli @security
 (B) Restore live container status inspection in workload.list and format STATUS column in scripts/appctl_cli.py +cli @ux
 (B) Bootstrap operator admin token provisioning helper and documentation in docs/appctl.md and docs/secrets-and-state.md +docs @auth
 (B) Wire --build/--no-cache and pass --pull during compose_build in scripts/appctl_router.py and scripts/appctl_cli.py +build @p4

@@ -360,3 +360,79 @@ def test_appctl_wrapper_fast_paths_completion_when_socket_exists(tmp_path: Path,
     finally:
         srv.close()
 
+
+def test_appctl_wrapper_fails_closed_when_socket_is_missing(tmp_path: Path):
+    """Ensure scripts/appctl fails closed with exit code 1 and diagnostic stderr when socket is missing."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    bash_bin = shutil.which("bash") or "bash"
+    non_existent_sock = tmp_path / "missing_appctl.sock"
+    appctl_script = Path(__file__).resolve().parent.parent.parent / "scripts" / "appctl"
+
+    env = {
+        "PATH": os.environ.get("PATH", "/run/current-system/sw/bin:/usr/bin:/bin"),
+        "PYTHON_BIN": sys.executable,
+        "HOMELAB_DOMAIN": "example.test",
+        "APPCTL_SOCKET_PATH": str(non_existent_sock),
+        "SITES_DIR": str(tmp_path),
+    }
+    if "PYTHONPATH" in os.environ:
+        env["PYTHONPATH"] = os.environ["PYTHONPATH"]
+
+    res = subprocess.run(
+        [bash_bin, str(appctl_script), "status"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 1
+    assert "daemon socket not found" in res.stderr
+
+
+def test_appctl_wrapper_fast_paths_completion_without_socket(tmp_path: Path):
+    """Ensure scripts/appctl completes offline via appctl_engine.py even when socket is missing."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    bash_bin = shutil.which("bash") or "bash"
+    non_existent_sock = tmp_path / "missing_appctl.sock"
+    appctl_script = Path(__file__).resolve().parent.parent.parent / "scripts" / "appctl"
+
+    env = {
+        "PATH": os.environ.get("PATH", "/run/current-system/sw/bin:/usr/bin:/bin"),
+        "PYTHON_BIN": sys.executable,
+        "HOMELAB_DOMAIN": "example.test",
+        "APPCTL_SOCKET_PATH": str(non_existent_sock),
+        "SITES_DIR": str(tmp_path),
+    }
+    if "PYTHONPATH" in os.environ:
+        env["PYTHONPATH"] = os.environ["PYTHONPATH"]
+
+    res_comp = subprocess.run(
+        [bash_bin, str(appctl_script), "completion", "bash"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_comp.returncode == 0
+    assert "_appctl_completions()" in res_comp.stdout
+
+    res_words = subprocess.run(
+        [bash_bin, str(appctl_script), "complete", "services"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_words.returncode == 0
+    assert "traefik" in res_words.stdout
+    assert "core" in res_words.stdout
+
+
