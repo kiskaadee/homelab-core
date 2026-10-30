@@ -296,20 +296,29 @@ To bring up a replacement host from version control:
 
 This runbook defines the 4-stage staged coexistence cutover procedure to migrate host operation from a legacy personal operator account (`<legacy-operator>`) to the platform standard `operator` user (`uid = 1000`, `extraGroups = [ "wheel" "docker" "homelab-operators" "networkmanager" ]`), fulfilling Decision D2 and eliminating personal identity coupling.
 
-### Stage 1: Pre-Flight Checks
-Before initiating data synchronization or service cutover, verify the target `operator` account environment:
+### Stage 1: Pre-Flight Checks & Session Preservation
 
-1. **Verify `operator` account existence and home directory**:
+> [!IMPORTANT]
+> **Maintain Active Legacy Shell Session**:  
+> Do not terminate your active SSH or terminal session as `<legacy-operator>`. Keep at least one authenticated shell open throughout the entire cutover process to prevent lockout in case of SSH key, user profile, or PAM misconfiguration.
+
+1. **Verify or provision `operator` account**:
+   Check if the `operator` user exists in the running environment:
    ```bash
    id operator
-   # Expected output must include membership in: wheel, docker, homelab-operators
-   ls -ld /home/operator
+   ```
+   If `operator` does not exist yet (as `homelab.operatorUser` has not been switched in the active NixOS generation), provision the initial coexistence user before proceeding:
+   ```bash
+   sudo useradd -m -s /run/current-system/sw/bin/bash -G wheel,docker,homelab-operators operator
    ```
 
-2. **Verify SSH key provisioning**:
-   Ensure the operator's authorized keys are installed with strict permissions:
+2. **Verify SSH key provisioning & permissions**:
+   Ensure the operator's authorized keys are installed with strict permissions (copying from `<legacy-operator>` if needed):
    ```bash
-   sudo ls -la /home/operator/.ssh/authorized_keys
+   sudo mkdir -p /home/operator/.ssh
+   if [ ! -f /home/operator/.ssh/authorized_keys ] && [ -f /home/<legacy-operator>/.ssh/authorized_keys ]; then
+     sudo cp /home/<legacy-operator>/.ssh/authorized_keys /home/operator/.ssh/authorized_keys
+   fi
    sudo chmod 700 /home/operator/.ssh
    sudo chmod 600 /home/operator/.ssh/authorized_keys
    sudo chown -R operator:users /home/operator/.ssh
@@ -321,20 +330,20 @@ Before initiating data synchronization or service cutover, verify the target `op
    sudo -u operator sudo -n true || echo "Passwordless or password sudo required for operator"
    ```
 
-4. **Verify persistent directories**:
-   Ensure `/home/operator/Sites` and `/home/operator/Core` target parent paths are ready:
+4. **Prepare persistent directories**:
+   Ensure `/home/operator/Sites`, `/home/operator/Core`, `/home/operator/var/lib/homelab`, and state parent paths are ready:
    ```bash
-   sudo mkdir -p /home/operator/{Core,Sites,.config/homelab}
-   sudo chown -R operator:homelab-operators /home/operator/{Core,Sites,.config}
+   sudo mkdir -p /home/operator/{Core,Sites,.config/homelab,var/lib/homelab,.local/state/homelab}
+   sudo chown -R operator:homelab-operators /home/operator/{Core,Sites,.config,var,.local}
    ```
 
 ---
 
 ### Stage 2: State and Repository Synchronization
-Synchronize repository checkouts, environment definitions, and runtime state from the legacy user account to `/home/operator/` using non-destructive archive flags (`-aHAX` preserves hard links, attributes, and extended ACLs):
+Synchronize repository checkouts, workload persistent data, and runtime state from the legacy user account to `/home/operator/` using non-destructive archive flags (`-aHAX` preserves hard links, attributes, and extended ACLs):
 
 1. **Initial background synchronization**:
-   Seed the file trees for Core and Sites while services continue running:
+   Seed the file trees for Core, Sites, workload databases, and configurations while services continue running:
    ```bash
    sudo rsync -aHAX --info=progress2 \
      --exclude=".venv" \
@@ -344,6 +353,16 @@ Synchronize repository checkouts, environment definitions, and runtime state fro
    sudo rsync -aHAX --info=progress2 \
      /home/<legacy-operator>/Sites/ /home/operator/Sites/
 
+   if [ -d "/home/<legacy-operator>/var/lib/homelab" ]; then
+     sudo rsync -aHAX --info=progress2 \
+       /home/<legacy-operator>/var/lib/homelab/ /home/operator/var/lib/homelab/
+   fi
+
+   if [ -d "/home/<legacy-operator>/.local/state/homelab" ]; then
+     sudo rsync -aHAX --info=progress2 \
+       /home/<legacy-operator>/.local/state/homelab/ /home/operator/.local/state/homelab/
+   fi
+
    if [ -d "/home/<legacy-operator>/.config/homelab" ]; then
      sudo rsync -aHAX --info=progress2 \
        /home/<legacy-operator>/.config/homelab/ /home/operator/.config/homelab/
@@ -351,9 +370,15 @@ Synchronize repository checkouts, environment definitions, and runtime state fro
    ```
 
 2. **Quiesce active database writers**:
-   Stop the platform stack to guarantee point-in-time consistency across SQLite databases (e.g. LLDAP `users.db`, Authelia `db.sqlite3`, Stalwart storage) before the cutover sync:
+   Stop running workload containers and the Core platform stack to guarantee point-in-time consistency across SQLite databases (e.g. LLDAP `users.db`, Authelia `db.sqlite3`, Stalwart storage, and workload app volumes in `~/var/lib/homelab/`) before the final sync:
    ```bash
+   # Stop running workload containers
+   appctl down --all 2>/dev/null || docker stop $(docker ps -q) 2>/dev/null || true
+
+   # Stop platform core services
    sudo systemctl stop homeserver-core
+   sudo systemctl stop homelab-appctl
+   sudo systemctl stop homelab-gitops
    ```
 
 3. **Final delta synchronization (`--delete`)**:
@@ -366,13 +391,28 @@ Synchronize repository checkouts, environment definitions, and runtime state fro
 
    sudo rsync -aHAX --delete --info=progress2 \
      /home/<legacy-operator>/Sites/ /home/operator/Sites/
+
+   if [ -d "/home/<legacy-operator>/var/lib/homelab" ]; then
+     sudo rsync -aHAX --delete --info=progress2 \
+       /home/<legacy-operator>/var/lib/homelab/ /home/operator/var/lib/homelab/
+   fi
+
+   if [ -d "/home/<legacy-operator>/.local/state/homelab" ]; then
+     sudo rsync -aHAX --delete --info=progress2 \
+       /home/<legacy-operator>/.local/state/homelab/ /home/operator/.local/state/homelab/
+   fi
    ```
 
 4. **Fix ownership and permissions**:
-   Set primary ownership to `operator` and group to `homelab-operators`:
+   Set primary ownership to `operator` and group to `homelab-operators` across all migrated trees:
    ```bash
-   sudo chown -R operator:homelab-operators /home/operator/Core /home/operator/Sites /home/operator/.config
-   sudo chmod -R u+rwX,g+rX /home/operator/Core /home/operator/Sites
+   sudo chown -R operator:homelab-operators \
+     /home/operator/Core \
+     /home/operator/Sites \
+     /home/operator/.config \
+     /home/operator/.local \
+     /home/operator/var
+   sudo chmod -R u+rwX,g+rX /home/operator/Core /home/operator/Sites /home/operator/var
 
    # ACME certificate security invariant: Traefik strictly requires 0600 on acme.json;
    # recursive group read permissions will cause Traefik to refuse to start.
