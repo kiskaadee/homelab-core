@@ -29,9 +29,20 @@ This plan establishes the concrete implementation work packages to resolve these
 - NixOS declares user `operator` (`uid = 1000` or standard user, `extraGroups = [ "wheel" "docker" "homelab-operators" "networkmanager" ]`).
 - Eliminates hardcoded personal usernames from the Core platform foundation.
 
-### B. Platform Genericism & Instance Profile
-- Core modules in `nixos/modules/` remain strictly generic, defaulting to RFC 2606 placeholders (`example.test`).
-- `nixos/configuration.nix` serves as the appliance instance profile where `homelab.domain` and `homelab.operatorUser` are explicitly set (e.g., using the host's configured production domain).
+### B. Platform Genericism & Instance Profile (Decision D1)
+- Core modules in `nixos/modules/` remain strictly generic, defaulting to RFC 2606 placeholders (`example.test` and `operator`).
+- **Decision D1: Dual-Path Instance Domain Injection**: Rather than committing host-specific production domains to tracked Git files, `nixos/configuration.nix` implements an optional dual-path import mechanism:
+  ```nix
+  imports = [
+    ./hardware-configuration.nix
+    ./modules/homeserver.nix
+    ./modules/traefik-deployments.nix
+    ./modules/dynu.nix
+    ./modules/shell.nix
+  ] ++ lib.optional (builtins.pathExists ./instance.nix) ./instance.nix
+    ++ lib.optional (builtins.pathExists /etc/nixos/homelab-instance.nix) /etc/nixos/homelab-instance.nix;
+  ```
+- `nixos/instance.nix` is git-ignored, allowing host-specific overrides (like `homelab.domain = "example.com";`) without dirtying version control. Alternatively, `/etc/nixos/homelab-instance.nix` provides a persistent host-level configuration path outside the repository checkout.
 - `LLDAP_LDAP_BASE_DN` is computed dynamically in Nix from `config.homelab.domain` (`domain: example.test` $\implies$ `dc=example,dc=test`), eliminating hardcoded domain strings across templates and Compose files.
 
 ### C. Control Plane Security & POSIX Permissions
@@ -71,6 +82,13 @@ This plan establishes the concrete implementation work packages to resolve these
 - [x] **Task 3.3**: Update `docs/decisions/README.md`.
 - [x] **Task 3.4**: Update `docs/appctl.md` (clarifying bounded log snapshots and Core update workflow).
 - [x] **Task 3.5**: Synchronize `todo.txt` with active implementation tasks.
+
+### Phase 4: Work Package 6 (WP6: Instance Decoupling & Operator Cutover Runbook)
+- [x] **Task 4.1**: Update `nixos/configuration.nix` with optional dual-path imports for `./instance.nix` and `/etc/nixos/homelab-instance.nix` (Decision D1).
+- [x] **Task 4.2**: Add `nixos/instance.nix` to `.gitignore` to preserve 100% repository genericism.
+- [x] **Task 4.3**: Implement automated invariant tests in `tests/security/test_security_invariants.py` (default domain evaluation, dynamic LDAP base DN, instance override, platform genericism).
+- [x] **Task 4.4**: Document instance domain injection procedure in `docs/setup_guide.md`.
+- [x] **Task 4.5**: Codify the 4-stage Staged Coexistence Cutover Runbook (Decision D2) in `docs/operations.md` with explicit notice blocking live host execution pending maintenance window.
 
 ---
 

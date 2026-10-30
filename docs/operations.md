@@ -16,8 +16,14 @@ After modifying any file in `nixos/` (including `configuration.nix`, `hardware-c
 nix-switch
 
 # Or using the explicit command:
-sudo nixos-rebuild switch --flake ~/Core#server
+sudo nixos-rebuild switch --flake path:/home/operator/Core#server --impure
 ```
+
+> [!NOTE]
+> **Flake Fetcher Scheme for Untracked Files**:
+> When importing the gitignored `nixos/instance.nix`, Nix's default Git fetcher filters it out unless the `path:` scheme is used (`path:/home/operator/Core#server` or `path:~/Core#server`). The `path:` scheme instructs Nix to evaluate directly from the filesystem without filtering by the Git index.
+> If using `/etc/nixos/homelab-instance.nix`, a standard `--flake ~/Core#server --impure` works directly since `/etc/nixos` is outside the repository.
+
 
 ### Dry Build Validation & Rollback
 ```bash
@@ -279,3 +285,187 @@ To bring up a replacement host from version control:
    ```bash
    sudo systemctl start homeserver-core
    ```
+
+---
+
+## 7. Operator Account Migration Runbook (Decision D2: Staged Coexistence Cutover)
+
+> [!CAUTION]
+> **MAINTENANCE WINDOW REQUIRED — EXECUTION ON LIVE HOST CURRENTLY BLOCKED**  
+> Live execution of this runbook against production hosts is strictly blocked until an authorized platform maintenance window is scheduled. This runbook is codified for procedural readiness and dry-run verification only.
+
+This runbook defines the 4-stage staged coexistence cutover procedure to migrate host operation from a legacy personal operator account (`<legacy-operator>`) to the platform standard `operator` user (`uid = 1000`, `extraGroups = [ "wheel" "docker" "homelab-operators" "networkmanager" ]`), fulfilling Decision D2 and eliminating personal identity coupling.
+
+### Stage 1: Pre-Flight Checks
+Before initiating data synchronization or service cutover, verify the target `operator` account environment:
+
+1. **Verify `operator` account existence and home directory**:
+   ```bash
+   id operator
+   # Expected output must include membership in: wheel, docker, homelab-operators
+   ls -ld /home/operator
+   ```
+
+2. **Verify SSH key provisioning**:
+   Ensure the operator's authorized keys are installed with strict permissions:
+   ```bash
+   sudo ls -la /home/operator/.ssh/authorized_keys
+   sudo chmod 700 /home/operator/.ssh
+   sudo chmod 600 /home/operator/.ssh/authorized_keys
+   sudo chown -R operator:users /home/operator/.ssh
+   ```
+
+3. **Verify administrative (`sudo`) access**:
+   Test that `operator` can authenticate and execute privileged commands without failure:
+   ```bash
+   sudo -u operator sudo -n true || echo "Passwordless or password sudo required for operator"
+   ```
+
+4. **Verify persistent directories**:
+   Ensure `/home/operator/Sites` and `/home/operator/Core` target parent paths are ready:
+   ```bash
+   sudo mkdir -p /home/operator/{Core,Sites,.config/homelab}
+   sudo chown -R operator:homelab-operators /home/operator/{Core,Sites,.config}
+   ```
+
+---
+
+### Stage 2: State and Repository Synchronization
+Synchronize repository checkouts, environment definitions, and runtime state from the legacy user account to `/home/operator/` using non-destructive archive flags (`-aHAX` preserves hard links, attributes, and extended ACLs):
+
+1. **Initial background synchronization**:
+   Seed the file trees for Core and Sites while services continue running:
+   ```bash
+   sudo rsync -aHAX --info=progress2 \
+     --exclude=".venv" \
+     --exclude=".pytest_cache" \
+     /home/<legacy-operator>/Core/ /home/operator/Core/
+
+   sudo rsync -aHAX --info=progress2 \
+     /home/<legacy-operator>/Sites/ /home/operator/Sites/
+
+   if [ -d "/home/<legacy-operator>/.config/homelab" ]; then
+     sudo rsync -aHAX --info=progress2 \
+       /home/<legacy-operator>/.config/homelab/ /home/operator/.config/homelab/
+   fi
+   ```
+
+2. **Quiesce active database writers**:
+   Stop the platform stack to guarantee point-in-time consistency across SQLite databases (e.g. LLDAP `users.db`, Authelia `db.sqlite3`, Stalwart storage) before the cutover sync:
+   ```bash
+   sudo systemctl stop homeserver-core
+   ```
+
+3. **Final delta synchronization (`--delete`)**:
+   Perform a rapid final delta synchronization with `--delete` to capture the quiesced database state and prune removed files:
+   ```bash
+   sudo rsync -aHAX --delete --info=progress2 \
+     --exclude=".venv" \
+     --exclude=".pytest_cache" \
+     /home/<legacy-operator>/Core/ /home/operator/Core/
+
+   sudo rsync -aHAX --delete --info=progress2 \
+     /home/<legacy-operator>/Sites/ /home/operator/Sites/
+   ```
+
+4. **Fix ownership and permissions**:
+   Set primary ownership to `operator` and group to `homelab-operators`:
+   ```bash
+   sudo chown -R operator:homelab-operators /home/operator/Core /home/operator/Sites /home/operator/.config
+   sudo chmod -R u+rwX,g+rX /home/operator/Core /home/operator/Sites
+
+   # ACME certificate security invariant: Traefik strictly requires 0600 on acme.json;
+   # recursive group read permissions will cause Traefik to refuse to start.
+   if [ -f /home/operator/Core/config/letsencrypt/acme.json ]; then
+     sudo chmod 600 /home/operator/Core/config/letsencrypt/acme.json
+   fi
+   ```
+
+---
+
+### Stage 3: Service Rebuild & Environment Cutover
+Activate the declarative configuration under the `operator` profile:
+
+1. **Configure instance domain injection (Decision D1)**:
+   Ensure `nixos/instance.nix` (or `/etc/nixos/homelab-instance.nix`) is in place with the host's production domain:
+   ```bash
+   cat << 'EOF' | sudo -u operator tee /home/operator/Core/nixos/instance.nix > /dev/null
+   {
+     homelab.domain = "example.com";
+   }
+   EOF
+   chmod 600 /home/operator/Core/nixos/instance.nix
+   ```
+
+2. **Rebuild NixOS host configuration**:
+   Execute the rebuild from the new canonical Core path using `--impure` and the `path:` scheme to import the untracked instance profile:
+   ```bash
+   cd /home/operator/Core
+   sudo nixos-rebuild switch --flake path:/home/operator/Core#server --impure
+   ```
+
+   > [!NOTE]
+   > The `path:` scheme instructs Nix to evaluate directly from the filesystem without filtering by the Git index, ensuring untracked/gitignored `nixos/instance.nix` is evaluated. (If using `/etc/nixos/homelab-instance.nix`, bare `--flake .#server --impure` works directly).
+
+3. **Restart platform services**:
+   Restart the Core Compose stack and control plane services to consume updated paths:
+   ```bash
+   sudo systemctl restart homeserver-core
+   sudo systemctl restart homelab-appctl
+   sudo systemctl restart homelab-gitops
+   ```
+
+---
+
+### Stage 4: Post-Flight Verification
+Validate system health and operational readiness under the `operator` identity:
+
+1. **Verify Git safe directory**:
+   Ensure Git does not complain about dubious ownership when invoked by `operator` or `homelab-appctl`:
+   ```bash
+   sudo -u operator git -C /home/operator/Core status
+   sudo -u operator git -C /home/operator/Sites/<any-workload> status
+   ```
+
+2. **Verify appctl control plane status**:
+   Execute CLI inspection using both UDS peercred authentication and token authentication:
+   ```bash
+   # Peercred UDS inspection
+   sudo -u operator appctl list --core
+   
+   # Workload health check
+   sudo -u operator appctl status
+   ```
+
+3. **Verify SOPS secrets and tokens**:
+   Ensure `/run/secrets/appctl/tokens.json` is readable by `homelab-appctl` and valid tokens exist for operator administration:
+   ```bash
+   sudo ls -l /run/secrets/appctl/tokens.json
+   ```
+
+4. **Verify container reachability & proxy routing**:
+   Check that external endpoints and internal reverse proxies resolve:
+   ```bash
+   docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+   curl -s -k https://127.0.0.1 -H "Host: dashboard.example.com" | head -n 5
+   ```
+
+---
+
+### Rollback Procedure
+If unexpected service degradation occurs during the cutover:
+
+1. **Revert NixOS system generation**:
+   ```bash
+   sudo nixos-rebuild switch --rollback
+   ```
+
+2. **Restart legacy Core services**:
+   ```bash
+   sudo systemctl restart homeserver-core
+   sudo systemctl restart homelab-appctl
+   sudo systemctl restart homelab-gitops
+   ```
+
+3. **Log rollback reason**:
+   Record the diagnostic failure logs in `journalctl -xe` and investigate before attempting another cutover window.

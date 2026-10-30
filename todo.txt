@@ -44,3 +44,4 @@ x 2026-10-30 (B) Restore live container status inspection in workload.list and f
 x 2026-10-30 (B) Bootstrap operator admin token provisioning helper and documentation in docs/appctl.md and docs/secrets-and-state.md +docs @auth
 x 2026-10-30 (B) Wire --build/--no-cache and pass --pull during compose_build in scripts/appctl_router.py and scripts/appctl_cli.py +build @p4
 x 2026-10-30 (C) Deprecate P6 on-server AI authoring compiler in favor of external Homelab MCP Gateway in ROADMAP.md and ADR 0002 +docs @roadmap
+x 2026-10-30 (A) Implement instance domain injection dual-path import and operator cutover runbook in nixos/configuration.nix and docs/ +generic @nixos

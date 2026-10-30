@@ -4,6 +4,7 @@ Security invariant tests for Docker Compose and container isolation.
 
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -288,4 +289,133 @@ def test_nixos_tmpfiles_rules_use_recursive_acls():
     assert '"A+ ${config.homelab.coreDir}/config/homepage' in content, (
         "tmpfiles.rules must use uppercase 'A+' for recursive ACL inheritance on homepage config"
     )
+
+
+def test_default_homelab_domain_evaluates_to_example_test():
+    """Assert default homelab.domain in NixOS config evaluates to 'example.test'."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+    assert 'default = "example.test";' in content, (
+        "homeserver.nix must set default homelab.domain to 'example.test'"
+    )
+
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        cmd = [
+            nix_bin,
+            "eval",
+            ".#nixosConfigurations.server.config.homelab.domain",
+            "--raw",
+        ]
+        res = subprocess.run(
+            cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+        )
+        assert res.stdout.strip() == "example.test", (
+            f"Default homelab.domain must be 'example.test', got '{res.stdout.strip()}'"
+        )
+
+
+def test_dynamic_lldap_base_dn_splits_domain_components():
+    """Assert dynamic LLDAP_LDAP_BASE_DN splits domain into dc=... components for any domain."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+    assert "LLDAP_LDAP_BASE_DN = ldapBaseDn;" in content, (
+        "homeserver.nix must bind LLDAP_LDAP_BASE_DN to ldapBaseDn in homeserver.env template"
+    )
+    assert 'domainParts = lib.splitString "." config.homelab.domain;' in content, (
+        "homeserver.nix must split homelab.domain by '.'"
+    )
+    assert 'ldapBaseDn = lib.concatStringsSep "," (map (part: "dc=${part}") domainParts);' in content, (
+        "homeserver.nix must map domain components into dc=${part}"
+    )
+
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        cases = [
+            ("example.test", "dc=example,dc=test"),
+            ("my.homelab.internal", "dc=my,dc=homelab,dc=internal"),
+            ("local", "dc=local"),
+        ]
+        for domain, expected_dn in cases:
+            expr = (
+                f'let flake = builtins.getFlake (toString ./.); lib = flake.inputs.nixpkgs.lib; '
+                f'domainParts = lib.splitString "." "{domain}"; '
+                f'in lib.concatStringsSep "," (map (part: "dc=${{part}}") domainParts)'
+            )
+            cmd = [
+                nix_bin,
+                "eval",
+                "--impure",
+                "--expr",
+                expr,
+                "--raw",
+            ]
+            res = subprocess.run(
+                cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+            )
+            assert res.stdout.strip() == expected_dn, (
+                f"Expected {expected_dn} for domain {domain}, got {res.stdout.strip()}"
+            )
+
+        # Also assert rendered sops template in default configuration contains correct LLDAP_LDAP_BASE_DN
+        cmd_tpl = [
+            nix_bin,
+            "eval",
+            '.#nixosConfigurations.server.config.sops.templates."homeserver.env".content',
+            "--raw",
+        ]
+        res_tpl = subprocess.run(
+            cmd_tpl, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+        )
+        assert "LLDAP_LDAP_BASE_DN=dc=example,dc=test" in res_tpl.stdout
+
+
+def test_dual_path_import_overrides_homelab_domain():
+    """Assert dual-path import overrides homelab.domain when ./nixos/instance.nix is present."""
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        instance_nix = CORE_ROOT / "nixos" / "instance.nix"
+        try:
+            instance_nix.write_text(
+                '{ homelab.domain = "custom.internal"; }\n', encoding="utf-8"
+            )
+            cmd = [
+                nix_bin,
+                "eval",
+                "--impure",
+                "path:.#nixosConfigurations.server.config.homelab.domain",
+                "--raw",
+            ]
+            res = subprocess.run(
+                cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+            )
+            assert res.stdout.strip() == "custom.internal", (
+                f"Expected homelab.domain to be overridden to 'custom.internal', got '{res.stdout.strip()}'"
+            )
+        finally:
+            if instance_nix.exists():
+                instance_nix.unlink()
+
+
+def test_nixos_configuration_declares_dual_path_instance_imports():
+    """Ensure nixos/configuration.nix includes optional dual-path instance imports."""
+    config_nix = CORE_ROOT / "nixos" / "configuration.nix"
+    content = config_nix.read_text(encoding="utf-8")
+    assert "builtins.pathExists ./instance.nix" in content, (
+        "nixos/configuration.nix must check for ./instance.nix via builtins.pathExists"
+    )
+    assert "builtins.pathExists /etc/nixos/homelab-instance.nix" in content, (
+        "nixos/configuration.nix must check for /etc/nixos/homelab-instance.nix via builtins.pathExists"
+    )
+
+
+def test_gitignore_includes_instance_nix():
+    """Ensure nixos/instance.nix is ignored in .gitignore to preserve platform genericism."""
+    gitignore = CORE_ROOT / ".gitignore"
+    content = gitignore.read_text(encoding="utf-8")
+    lines = [line.strip() for line in content.splitlines()]
+    assert "nixos/instance.nix" in lines, (
+        "nixos/instance.nix must be explicitly ignored in .gitignore"
+    )
+
 

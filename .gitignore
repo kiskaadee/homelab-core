@@ -6,6 +6,7 @@ backup.zip
 .envrc
 .direnv
 .venv
+nixos/instance.nix
 
 # SSL / ACME Certificates & Keys
 config/letsencrypt/*
