@@ -829,3 +829,132 @@ def test_operational_router_workload_list_honors_filter_params(
         assert mock_ssl.call_count >= 1
 
 
+def test_operational_router_workload_list_includes_live_docker_and_two_axis_status(
+    tmp_path: Path,
+    viewer_principal: Principal,
+    mock_workload_dir: Path,
+    mock_core_dir: Path,
+):
+    """Ensure workload.list always inspects docker status and computes two-axis status for apps and core."""
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_workload_dir.parent,
+        core_dir=mock_core_dir,
+    )
+
+    with patch("appctl_router.get_docker_status", return_value="🟢 Running (1)") as mock_docker:
+        # 1. Sites workload offline (fetch=False)
+        resp = router.dispatch(
+            OperationRequest.model_validate({
+                "operation": "workload.list",
+                "parameters": {"core": False, "fetch": False, "ssl": False},
+            }),
+            viewer_principal,
+        )
+        assert resp.success is True
+        assert resp.result is not None
+        workload = resp.result["workloads"][0]
+        assert workload["name"] == "snappymail"
+        assert workload["status"] == "🟢 Running (1)"
+        assert "deployment_status" in workload
+        assert "provenance_status" in workload
+        assert workload["provenance_status"] == "— Not Checked"
+        mock_docker.assert_called_with(dir_path=mock_workload_dir)
+
+        # 2. Core services included (core=True)
+        resp_core = router.dispatch(
+            OperationRequest.model_validate({
+                "operation": "workload.list",
+                "parameters": {"core": True, "fetch": False, "ssl": False},
+            }),
+            viewer_principal,
+        )
+        assert resp_core.success is True
+        assert resp_core.result is not None
+        core_workloads = {w["name"]: w for w in resp_core.result["workloads"]}
+        assert "traefik" in core_workloads
+        traefik = core_workloads["traefik"]
+        assert traefik["status"] == "🟢 Running (1)"
+        assert traefik["provenance_status"] == "— Core Platform"
+        assert "deployment_status" in traefik
+
+
+def test_operational_router_workload_list_fetch_passes_fetch_upstream(
+    tmp_path: Path,
+    viewer_principal: Principal,
+    mock_workload_dir: Path,
+    mock_core_dir: Path,
+):
+    """Ensure workload.list with fetch=True calls inspect_workload_two_axis with fetch_upstream=True."""
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_workload_dir.parent,
+        core_dir=mock_core_dir,
+    )
+
+    with (
+        patch("appctl_router.get_docker_status", return_value="🟢 Running (1)"),
+        patch("appctl_router.inspect_workload_two_axis") as mock_inspect,
+    ):
+        mock_two_axis = MagicMock()
+        mock_two_axis.checkout.status_label = "✓ Synced (main)"
+        mock_two_axis.provenance.status.value = "✓ Synced"
+        mock_inspect.return_value = mock_two_axis
+
+        resp_fetch = router.dispatch(
+            OperationRequest.model_validate({
+                "operation": "workload.list",
+                "parameters": {"core": False, "fetch": True, "ssl": False},
+            }),
+            viewer_principal,
+        )
+        assert resp_fetch.success is True
+        assert resp_fetch.result is not None
+        mock_inspect.assert_called_once()
+        _, kwargs = mock_inspect.call_args
+        assert kwargs.get("fetch_upstream") is True
+        w = resp_fetch.result["workloads"][0]
+        assert w["deployment_status"] == "✓ Synced (main)"
+        assert w["provenance_status"] == "✓ Synced"
+
+
+def test_operational_router_workload_list_handles_manifest_error(
+    tmp_path: Path,
+    viewer_principal: Principal,
+    mock_sites_dir: Path,
+    mock_core_dir: Path,
+):
+    """Ensure workload.list sets deployment_status and provenance_status correctly for apps with manifest errors."""
+    broken_app_dir = mock_sites_dir / "broken-app"
+    broken_app_dir.mkdir(parents=True, exist_ok=True)
+    (broken_app_dir / "app.yaml").write_text("invalid_yaml: [unclosed list", encoding="utf-8")
+
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_sites_dir,
+        core_dir=mock_core_dir,
+    )
+
+    with patch("appctl_router.get_docker_status", return_value="🔴 Stopped"):
+        resp = router.dispatch(
+            OperationRequest.model_validate({
+                "operation": "workload.list",
+                "parameters": {"core": False, "fetch": False, "ssl": False},
+            }),
+            viewer_principal,
+        )
+        assert resp.success is True
+        assert resp.result is not None
+        apps = {w["name"]: w for w in resp.result["workloads"]}
+        assert "broken-app" in apps
+        broken = apps["broken-app"]
+        assert broken["manifest_error"] is not None
+        assert broken["deployment_status"] == "⚠️ Manifest Error"
+        assert broken["provenance_status"] == "⚠️ Invalid Manifest"
+
+
+
+

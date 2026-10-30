@@ -200,6 +200,7 @@ def test_docker_status_parser_running(monkeypatch):
 
     def mock_run(args, **kwargs):
         mock = MagicMock()
+        mock.returncode = 0
         if "ps" in args:
             mock.stdout = "container123\n"
         if "inspect" in args:
@@ -217,6 +218,7 @@ def test_docker_status_parser_stopped(monkeypatch):
 
     def mock_run(args, **kwargs):
         mock = MagicMock()
+        mock.returncode = 0
         if "ps" in args:
             mock.stdout = ""
         return mock
@@ -232,6 +234,7 @@ def test_docker_status_parser_degraded(monkeypatch):
 
     def mock_run(args, **kwargs):
         mock = MagicMock()
+        mock.returncode = 0
         if "ps" in args:
             mock.stdout = "c1\nc2\n"
         if "inspect" in args:
@@ -256,6 +259,7 @@ def test_docker_status_single_container(monkeypatch):
 
     def mock_run(args, **kwargs):
         mock = MagicMock()
+        mock.returncode = 0
         if "authelia" in args:
             mock.stdout = "true\n"
         else:
@@ -265,6 +269,72 @@ def test_docker_status_single_container(monkeypatch):
     monkeypatch.setattr("subprocess.run", mock_run)
 
     assert engine.get_docker_status("", container_name="authelia") == "🟢 Running (1)"
+    assert engine.get_docker_status("", container_name="traefik") == "🔴 Stopped"
+
+
+def test_docker_status_compose_ps_daemon_error(monkeypatch):
+    """Ensure get_docker_status returns '❓ Unknown' when docker compose ps fails (e.g. daemon unreachable)."""
+    import subprocess
+
+    def mock_run(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout="",
+            stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
+        )
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    assert engine.get_docker_status("/fake/dir") == "❓ Unknown"
+
+
+def test_docker_status_compose_inspect_error(monkeypatch):
+    """Ensure get_docker_status returns '❓ Unknown' when docker inspect fails for compose containers."""
+    import subprocess
+
+    def mock_run(args, **kwargs):
+        if "ps" in args:
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="c1\n", stderr="")
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout="",
+            stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
+        )
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    assert engine.get_docker_status("/fake/dir") == "❓ Unknown"
+
+
+def test_docker_status_single_container_daemon_error(monkeypatch):
+    """Ensure get_docker_status returns '❓ Unknown' when inspecting single container fails due to daemon error."""
+    import subprocess
+
+    def mock_run(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout="",
+            stderr="Cannot connect to the Docker daemon at unix:///var/run/docker.sock",
+        )
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+    assert engine.get_docker_status("", container_name="traefik") == "❓ Unknown"
+
+
+def test_docker_status_single_container_no_such_object(monkeypatch):
+    """Ensure get_docker_status returns '🔴 Stopped' when container does not exist."""
+    import subprocess
+
+    def mock_run(args, **kwargs):
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout="",
+            stderr="Error: No such object: traefik",
+        )
+
+    monkeypatch.setattr("subprocess.run", mock_run)
     assert engine.get_docker_status("", container_name="traefik") == "🔴 Stopped"
 
 

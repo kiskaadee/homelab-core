@@ -108,6 +108,10 @@ class CoreService(App):
     app_type: str = "core_service"
     dir_path: str = CORE_DIR
 
+    @property
+    def container_name(self) -> str:
+        return self.container
+
 
 @dataclass
 class SitesApp(App):
@@ -411,6 +415,11 @@ def get_docker_status(
                 text=True,
                 check=False,
             )
+            if inspect_res.returncode != 0:
+                err = (inspect_res.stderr or "").lower()
+                if "no such object" in err or "no such container" in err:
+                    return "🔴 Stopped"
+                return "❓ Unknown"
             state = inspect_res.stdout.strip()
             if state.lower() == "true":
                 return "🟢 Running (1)"
@@ -431,6 +440,9 @@ def get_docker_status(
             text=True,
             check=False,
         )
+        if res.returncode != 0:
+            return "❓ Unknown"
+
         container_ids = [c for c in res.stdout.strip().splitlines() if c]
         if not container_ids:
             return "🔴 Stopped"
@@ -441,6 +453,9 @@ def get_docker_status(
             text=True,
             check=False,
         )
+        if inspect_res.returncode != 0:
+            return "❓ Unknown"
+
         running_states = inspect_res.stdout.strip().splitlines()
         running_count = sum(1 for s in running_states if s.lower() == "true")
         total_count = len(container_ids)

@@ -116,7 +116,7 @@ def test_cli_handles_missing_socket():
 
 
 def test_cli_format_response_renders_workload_list_table():
-    """Ensure workload.list renders a human-readable table instead of suppressing it behind result['message']."""
+    """Ensure workload.list renders the canonical 5-column layout matching docs/appctl.md."""
     resp = OperationResponse(
         version="1.0",
         success=True,
@@ -129,13 +129,17 @@ def test_cli_format_response_renders_workload_list_table():
                     "name": "snappymail",
                     "type": "app",
                     "domain": "mail.example.test",
-                    "description": "Webmail client",
+                    "deployment_status": "✓ Synced (main)",
+                    "provenance_status": "✓ Synced",
+                    "status": "🟢 Running (1)",
                 },
                 {
                     "name": "traefik",
                     "type": "core_service",
                     "domain": "traefik.example.test",
-                    "description": "Edge Reverse Proxy",
+                    "deployment_status": "",
+                    "provenance_status": "— Core Platform",
+                    "status": "🟢 Running (1)",
                 },
             ],
             "message": "Found 2 workloads",
@@ -143,13 +147,87 @@ def test_cli_format_response_renders_workload_list_table():
         output="",
     )
     rendered = format_response(resp, raw_json=False)
-    assert "SERVICE" in rendered
-    assert "DOMAIN" in rendered
-    assert "snappymail" in rendered
-    assert "mail.example.test" in rendered
-    assert "traefik" in rendered
-    assert "Edge Reverse Proxy" in rendered
+    lines = rendered.splitlines()
+    assert len(lines) >= 4
+    assert lines[0] == "SERVICE          DEPLOYMENT             PROVENANCE               STATUS          DOMAIN"
+    assert lines[1] == "-------          ----------             ----------               ------          ------"
+    assert "snappymail" in lines[2]
+    assert "✓ Synced (main)" in lines[2]
+    assert "✓ Synced" in lines[2]
+    assert "🟢 Running (1)" in lines[2]
+    assert "mail.example.test" in lines[2]
+
+    assert "traefik" in lines[3]
+    assert "— Core Platform" in lines[3]
+    assert "🟢 Running (1)" in lines[3]
+    assert "traefik.example.test" in lines[3]
     assert "✨ Found 2 workloads" not in rendered
+
+
+def test_cli_format_response_renders_workload_list_table_with_ssl():
+    """Ensure workload.list with SSL renders the canonical 6-column layout with CERT."""
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_list_ssl_01",
+        operation=OperationType.WORKLOAD_LIST,
+        result={
+            "total": 1,
+            "workloads": [
+                {
+                    "name": "snappymail",
+                    "type": "app",
+                    "domain": "mail.example.test",
+                    "deployment_status": "✓ Synced (main)",
+                    "provenance_status": "✓ Synced",
+                    "status": "🟢 Running (1)",
+                    "ssl": {"status": "🟢 80d remaining"},
+                },
+            ],
+            "message": "Found 1 workloads",
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    lines = rendered.splitlines()
+    assert len(lines) >= 3
+    assert lines[0] == "SERVICE          DEPLOYMENT             PROVENANCE             STATUS          DOMAIN                       CERT"
+    assert lines[1] == "-------          ----------             ----------             ------          ------                       ----"
+    assert "snappymail" in lines[2]
+    assert "🟢 80d remaining" in lines[2]
+
+
+def test_cli_format_response_renders_workload_list_table_with_manifest_error():
+    """Ensure workload.list renders ⚠️ Manifest Error and ⚠️ Invalid Manifest, and status=None renders as '-'."""
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_list_err",
+        operation=OperationType.WORKLOAD_LIST,
+        result={
+            "total": 1,
+            "workloads": [
+                {
+                    "name": "broken-app",
+                    "type": "app",
+                    "domain": "broken.example.test",
+                    "manifest_error": "Syntax error in app.yaml",
+                    "status": None,
+                },
+            ],
+            "message": "Found 1 workloads",
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    lines = rendered.splitlines()
+    assert len(lines) >= 3
+    assert "broken-app" in lines[2]
+    assert "⚠️ Manifest Error" in lines[2]
+    assert "⚠️ Invalid Manifest" in lines[2]
+    # Ensure status is '-' and NOT 'None'
+    assert " None " not in lines[2]
+    assert " - " in lines[2]
 
 
 def test_cli_format_response_renders_workload_get_info():

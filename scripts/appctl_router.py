@@ -63,6 +63,7 @@ from appctl_engine import (
     check_ssl_cert,
     cmd_sync_homepage,
     get_core_services,
+    get_docker_status,
     get_sites_apps,
     resolve_app,
 )
@@ -74,7 +75,7 @@ from core_manifest import (
     parse_manifest,
 )
 from gitops_dispatcher import validate_compose_security
-from provenance import inspect_workload_two_axis
+from provenance import get_local_checkout_status, inspect_workload_two_axis
 
 MAX_OUTPUT_BYTES = 256 * 1024  # 256 KiB cap per invocation
 
@@ -667,24 +668,39 @@ class OperationalRouter:
         for app in apps:
             item = app.to_dict()
             app_path = Path(app.dir_path)
-            if params.fetch:
+            docker_status = get_docker_status(dir_path=app_path)
+            item["status"] = docker_status
+
+            if app.manifest_error:
+                item["deployment_status"] = "⚠️ Manifest Error"
+                item["provenance_status"] = "⚠️ Invalid Manifest"
+            else:
                 manifest_obj = app.manifest_obj or Manifest(
                     name=app.name, domain=app.domain
                 )
                 two_axis = inspect_workload_two_axis(
                     app_dir=app_path,
                     manifest=manifest_obj,
-                    fetch_upstream=True,
+                    fetch_upstream=params.fetch,
+                    docker_status=docker_status,
                 )
                 item["deployment_status"] = two_axis.checkout.status_label
                 item["provenance_status"] = two_axis.provenance.status.value
+
             if params.ssl and not app.is_internal:
                 item["ssl"] = check_ssl_cert(app.domain)
             apps_data.append(item)
 
         if params.core:
-            for svc in get_core_services(core_dir=str(self.core_dir)):
+            core_checkout = get_local_checkout_status(self.core_dir)
+            for i, svc in enumerate(get_core_services(core_dir=str(self.core_dir))):
                 svc_dict = svc.to_dict()
+                svc_dict["status"] = get_docker_status(
+                    dir_path=self.core_dir,
+                    container_name=svc.container_name,
+                )
+                svc_dict["deployment_status"] = core_checkout.status_label if i == 0 else ""
+                svc_dict["provenance_status"] = "— Core Platform"
                 if params.ssl and not svc.is_internal:
                     svc_dict["ssl"] = check_ssl_cert(svc.domain)
                 apps_data.append(svc_dict)

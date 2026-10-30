@@ -58,28 +58,33 @@ def _format_workload_table(workloads: list[dict[str, Any]]) -> str:
 
     if has_ssl:
         lines.append(
-            f"{'SERVICE':<18} {'TYPE':<14} {'DOMAIN':<30} {'CERT':<24} {'DESCRIPTION'}"
+            f"{'SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<22} {'STATUS':<15} {'DOMAIN':<28} {'CERT'}"
         )
         lines.append(
-            f"{'-------':<18} {'----':<14} {'------':<30} {'----':<24} {'-----------'}"
+            f"{'-------':<16} {'----------':<22} {'----------':<22} {'------':<15} {'------':<28} {'----'}"
         )
     else:
         lines.append(
-            f"{'SERVICE':<18} {'TYPE':<14} {'DOMAIN':<30} {'DESCRIPTION'}"
+            f"{'SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<24} {'STATUS':<15} {'DOMAIN'}"
         )
         lines.append(
-            f"{'-------':<18} {'----':<14} {'------':<30} {'-----------'}"
+            f"{'-------':<16} {'----------':<22} {'----------':<24} {'------':<15} {'------'}"
         )
 
     for w in workloads:
-        name = str(w.get("name", "-"))
-        w_type = str(w.get("type", w.get("app_type", "app")))
-        domain = str(w.get("domain", "-"))
-        desc = str(w.get("description", ""))
+        name = str(w.get("name") or "-")
+        domain = str(w.get("domain") or "-")
+        status = str(w.get("status") or "-")
+
         if w.get("manifest_error"):
-            desc = f"⚠️ {w['manifest_error']}"
-        elif w.get("deployment_status"):
-            desc = f"{w['deployment_status']} ({w.get('provenance_status', '-')})"
+            dep = "⚠️ Manifest Error"
+            prov = "⚠️ Invalid Manifest"
+        elif "deployment_status" in w:
+            dep = str(w["deployment_status"])
+            prov = str(w.get("provenance_status") or "-")
+        else:
+            dep = "-"
+            prov = str(w.get("provenance_status") or "-")
 
         if has_ssl:
             ssl_info = w.get("ssl")
@@ -89,10 +94,12 @@ def _format_workload_table(workloads: list[dict[str, Any]]) -> str:
                 else "-"
             )
             lines.append(
-                f"{name:<18} {w_type:<14} {domain:<30} {cert_status:<24} {desc}"
+                f"{name:<16} {dep:<22} {prov:<22} {status:<15} {domain:<28} {cert_status}"
             )
         else:
-            lines.append(f"{name:<18} {w_type:<14} {domain:<30} {desc}")
+            lines.append(
+                f"{name:<16} {dep:<22} {prov:<24} {status:<15} {domain}"
+            )
 
     return "\n".join(lines)
 
