@@ -15,8 +15,8 @@ It describes the implementation trajectory and phased engineering milestones for
 3. **Host Access Does Not Confer Mutation Authority (`DEC-02`)**: Entering via SSH does not bypass authentication. Every mutating operation and sensitive read (`workload.config`, `workload.logs`) requires an explicit Bearer token; tokenless local UDS calls fall back via `SO_PEERCRED` strictly to `homelab-viewer` read-only inspection.
 4. **Dedicated Service Identity & Fail-Closed Audit Guard (`DEC-03`)**: `homelab-appctl.service` executes as isolated user `homelab-appctl:homelab-operators` with mode `0600` append-only `/var/log/homelab/appctl/audit.jsonl`. Mutating operations abort immediately (`500 ERR_EXECUTION_FAILED`) if the pre-execution `DISPATCHED` audit write fails.
 5. **Unified Execution, Pre-Flight & Pure-Python Environment (`DEC-04`, `DEC-05`)**: Both CLI and GitOps worker paths execute through the daemon, enforcing Pydantic v2 manifest validation, `validate_compose_security()` AST checks, and inert pure-Python `.env` assembly (no shell `source` or `eval`).
-6. **Separation of Intent from Implementation**: `DeploymentModel` captures implementation-agnostic intent; concrete platform descriptors (`app.yaml` + Compose) are materialized and enforced by `appctl`.
-7. **AI Authoring Boundary**: AI agents act strictly as proposal generators (`DeploymentProposal`). Humans approve the intent (`DeploymentModel`). The AI possesses zero execution authority.
+6. **Separation of Intent from Implementation**: Declarative manifests (`app.yaml` + Compose) versioned in Git capture workload intent and platform descriptors, materialized and enforced deterministically by `appctl`.
+7. **AI Authoring Boundary & External MCP Gateway**: AI agents operate externally as proposal generators via client-side Model Context Protocol (MCP) tool integrations. Humans approve intent before any mutation is applied in Git. The server appliance hosts zero autonomous agent loops or on-server compilers.
 8. **Secret Reference Invariant**: Deployment definitions store secret references (`secretKeyRef`), never plaintext material, resolved at runtime via `SecretProvider`.
 9. **Clean State Root**: Mutable application runtime data resides strictly under `~/var/lib/homelab/<app>/`, isolated from Git repositories.
 
@@ -28,9 +28,9 @@ It describes the implementation trajectory and phased engineering milestones for
 | :--- | :--- | :--- |
 | **`appctl` Architecture** | Dedicated daemon service (`homelab-appctl.service`, user `homelab-appctl`) exposing `POST /v1/operations` over Unix socket and loopback HTTP, with thin-client CLI (`scripts/appctl_cli.py`). | Expand with Operations UI and external ForwardAuth integration (P5–P7). |
 | **Operational Auth** | Mandatory SHA-256 Bearer token + 3-role RBAC + UDS `SO_PEERCRED` viewer fallback (`/run/secrets/appctl/tokens.json`). | LLDAP directory RBAC & Authelia ForwardAuth (P5). |
-| **Metadata & Schema Engine** | Control-plane daemon validates requests via Pydantic v2 (`scripts/appctl_contracts.py`) and invokes `core_manifest.py` / `appctl_engine.py`. | Unified across `DeploymentModel` materialization (P6). |
-| **Deployment Model** | Direct authoring of `app.yaml` and `docker-compose.yml` in `~/Sites/<app>/`. | 5-stage lifecycle (planned in P6): `DeploymentProposal` $\to$ operator-approved `DeploymentModel` in Git $\to$ `appctl` materialization. |
-| **GitOps Engine** | Ingress/queue in `gitops_dispatcher.py`; worker delegates `workload.update` to daemon over `/run/homelab/appctl.sock`. | Integrated with `DeploymentModel` reconciliation (P6). |
+| **Metadata & Schema Engine** | Control-plane daemon validates requests via Pydantic v2 (`scripts/appctl_contracts.py`) and invokes `core_manifest.py` / `appctl_engine.py`. | Standardized JSON-RPC Model Context Protocol tools over Pydantic v2 schemas (P6). |
+| **Deployment Model** | Direct authoring of `app.yaml` and `docker-compose.yml` in `~/Sites/<app>/`. | Authoritative declarative Git state (`app.yaml` + Compose) managed via CLI, GitOps, or client-gated MCP tools (P6). |
+| **GitOps Engine** | Ingress/queue in `gitops_dispatcher.py`; worker delegates `workload.update` to daemon over `/run/homelab/appctl.sock`. | Unified continuous deployment worker driven by Git webhooks delegating to control plane daemon (P4 baseline consolidated). |
 | **Secret Distribution** | Age-encrypted `nixos/secrets.yaml` decrypted by `sops-nix` to tmpfs `/run/secrets/`. | Host secrets remain in `sops-nix`; workload secrets referenced by key and projected via `SecretProvider` (planned in P5). |
 | **Dashboard** | `appctl sync` compiles `config/homepage/services.yaml` from `app.yaml` manifests under `_homepage_sync.lock`. | Homepage consumes read-only live status from `appctl`; dedicated Operations UI client for management (planned in P7). |
 
@@ -138,7 +138,7 @@ It describes the implementation trajectory and phased engineering milestones for
 **Status**: ⏳ **Planned**
 * **Objective**: Deliver a unified web-based management experience without coupling the control plane to specific frontend engines.
 * **Key Deliverables**:
-  1. *Operations UI Client*: Dedicated lightweight web client consuming the `appctl` API for proposal review, approval, real-time log streaming, and API token management.
+  1. *Operations UI Client*: Dedicated lightweight web client consuming the `appctl` API for workload inspection, deployment management, real-time log streaming, and API token management.
   2. *Homepage Status Integration*: Homepage consumes live status widgets from `appctl` live endpoints or compiled service maps.
 * **Exit Criteria**: End-to-end browser and CLI deployment verification; Homepage accurately reflecting live container health.
 
