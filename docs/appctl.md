@@ -111,7 +111,7 @@ appctl:
 
 Save and exit your editor (SOPS will re-encrypt the file), then project the updated secrets:
 ```bash
-sudo nixos-rebuild switch --flake ~/Core#server
+sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure
 ```
 This updates `/run/secrets/appctl/tokens.json` (owned by `homelab-appctl:homelab-operators`, mode `0400`), which `homelab-appctl.service` consumes.
 
@@ -135,7 +135,7 @@ Verify permissions using both unauthenticated and authenticated queries:
 To rotate an operator token:
 1. Run `python3 scripts/bootstrap_token.py --force --token-id "operator-admin-$(date +%Y%m%d)"`.
 2. Open `sops nixos/secrets.yaml` and add the new descriptor to `appctl.tokens_json`. Keep the old entry temporarily if multiple sessions share it, or replace it immediately.
-3. Run `sudo nixos-rebuild switch --flake ~/Core#server` to apply the updated token store.
+3. Run `sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure` to apply the updated token store.
 4. Verify CLI operations (`appctl config docs`).
 5. Remove the deprecated token descriptor from `nixos/secrets.yaml` and re-run `nixos-rebuild switch`.
 

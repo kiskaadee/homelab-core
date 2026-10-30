@@ -103,7 +103,7 @@ brevo:
 ### 3. Save and Apply Changes
 Saving the file in your editor automatically re-encrypts it with Age. Apply the updated templates to running services:
 ```bash
-sudo nixos-rebuild switch --flake ~/Core#server
+sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure
 ```
 
 ---
