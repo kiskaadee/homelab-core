@@ -250,3 +250,19 @@ def test_resolve_upstream_provenance_class_b_and_default_timeout():
         prov = resolve_upstream_provenance(source, local_commit="abc1234")
         assert prov.status == ProvenanceStatus.SYNCED
         assert mock_run.call_args[1]["timeout"] == 10.0
+
+
+def test_get_local_checkout_status_git_error(tmp_path: Path):
+    app_dir = tmp_path / "git_error_app"
+    app_dir.mkdir()
+    (app_dir / ".git").mkdir()
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=128, stdout="", stderr="fatal: dubious ownership"
+        )
+        status = get_local_checkout_status(app_dir)
+        assert status.is_git is True
+        assert status.is_dirty is False
+        assert status.status_label == "⚠️ Git Error (exit 128)"
+

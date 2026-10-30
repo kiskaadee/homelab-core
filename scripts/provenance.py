@@ -109,6 +109,7 @@ def get_local_checkout_status(dir_path: Path | str) -> CheckoutStatus:
 
     # 1. Check cleanliness
     is_dirty = False
+    git_error: str | None = None
     try:
         status_res = subprocess.run(
             ["git", "-C", str(path), "status", "--porcelain"],
@@ -118,10 +119,14 @@ def get_local_checkout_status(dir_path: Path | str) -> CheckoutStatus:
             timeout=5.0,
             env=git_env,
         )
-        if status_res.returncode == 0 and status_res.stdout.strip():
-            is_dirty = True
-    except (subprocess.SubprocessError, OSError):
+        if status_res.returncode == 0:
+            if status_res.stdout.strip():
+                is_dirty = True
+        else:
+            git_error = f"⚠️ Git Error (exit {status_res.returncode})"
+    except (subprocess.SubprocessError, OSError) as exc:
         is_dirty = False
+        git_error = f"⚠️ Git Error ({exc.__class__.__name__})"
 
     # 2. Get active branch
     branch = ""
@@ -168,9 +173,12 @@ def get_local_checkout_status(dir_path: Path | str) -> CheckoutStatus:
         commit_sha = ""
 
     # 4. Format status label
-    state_symbol = "* Dirty" if is_dirty else "✓ Clean"
-    ref_desc = f"{branch}@{commit_sha}" if commit_sha else branch
-    status_label = f"{state_symbol} ({ref_desc})" if ref_desc else state_symbol
+    if git_error:
+        status_label = git_error
+    else:
+        state_symbol = "* Dirty" if is_dirty else "✓ Clean"
+        ref_desc = f"{branch}@{commit_sha}" if commit_sha else branch
+        status_label = f"{state_symbol} ({ref_desc})" if ref_desc else state_symbol
 
     return CheckoutStatus(
         is_git=True,

@@ -163,7 +163,7 @@ def main(argv: list[str] | None = None) -> int:
             f"Add the following descriptor to your SOPS tokens store (nixos/secrets.yaml -> appctl/tokens_json):\n\n"
             f"{json_snippet}\n\n"
             f"After updating nixos/secrets.yaml with `sops nixos/secrets.yaml`, apply changes with:\n"
-            f"  sudo nixos-rebuild switch --flake ~/Core#server\n"
+            f"  sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure\n"
         )
 
     return 0

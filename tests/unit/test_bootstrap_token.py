@@ -126,6 +126,7 @@ def test_bootstrap_cli_never_prints_raw_secret_to_stdout_or_stderr(
     # Ensure stdout provides helpful human guidance
     assert "operator-admin" in captured.out
     assert "sops nixos/secrets.yaml" in captured.out
+    assert "sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure" in captured.out
 
 
 def test_bootstrap_cli_print_json_outputs_valid_json_descriptor(
