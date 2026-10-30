@@ -161,6 +161,13 @@ class DeployParams(StrictModel):
     recreate: StrictBool = True
     remove_orphans: StrictBool = True
     build: StrictBool = False
+    no_cache: StrictBool = False
+
+    @model_validator(mode="after")
+    def imply_build_from_no_cache(self) -> DeployParams:
+        if self.no_cache:
+            self.build = True
+        return self
 
 
 class UpdateParams(StrictModel):
@@ -168,6 +175,13 @@ class UpdateParams(StrictModel):
 
     expected_branch: Annotated[StrictStr, Field(min_length=1)] | None = None
     build: StrictBool = False
+    no_cache: StrictBool = False
+
+    @model_validator(mode="after")
+    def imply_build_from_no_cache(self) -> UpdateParams:
+        if self.no_cache:
+            self.build = True
+        return self
 
 
 class LogsParams(StrictModel):

@@ -254,6 +254,7 @@ def run_cli(argv: list[str] | None = None) -> int:
     up_p = subparsers.add_parser("up", aliases=["deploy"], parents=[common_parser], help="Deploy workload")
     up_p.add_argument("target", help="Workload or core target")
     up_p.add_argument("--build", action="store_true", help="Rebuild container images")
+    up_p.add_argument("--no-cache", action="store_true", help="Rebuild container images without cache")
 
     # down / stop
     down_p = subparsers.add_parser("down", aliases=["stop"], parents=[common_parser], help="Stop workload")
@@ -267,6 +268,8 @@ def run_cli(argv: list[str] | None = None) -> int:
     update_p = subparsers.add_parser("update", parents=[common_parser], help="Update workload revision")
     update_p.add_argument("target", help="Workload target")
     update_p.add_argument("--branch", default=None, help="Expected git branch")
+    update_p.add_argument("--build", action="store_true", help="Rebuild container images")
+    update_p.add_argument("--no-cache", action="store_true", help="Rebuild container images without cache")
 
     # pull
     pull_p = subparsers.add_parser("pull", parents=[common_parser], help="Pull workload images")
@@ -323,10 +326,15 @@ def run_cli(argv: list[str] | None = None) -> int:
     elif cmd == "health":
         op_req = OperationRequest(operation=OperationType.PLATFORM_HEALTH)
     elif cmd in ("up", "deploy"):
+        build_flag = getattr(parsed, "build", False)
+        no_cache_flag = getattr(parsed, "no_cache", False)
         op_req = OperationRequest(
             operation=OperationType.WORKLOAD_DEPLOY,
             target=parsed.target,
-            parameters={"build": getattr(parsed, "build", False)},
+            parameters={
+                "build": build_flag or no_cache_flag,
+                "no_cache": no_cache_flag,
+            },
         )
     elif cmd in ("down", "stop"):
         op_req = OperationRequest(
@@ -342,6 +350,12 @@ def run_cli(argv: list[str] | None = None) -> int:
         params = {}
         if getattr(parsed, "branch", None):
             params["expected_branch"] = parsed.branch
+        build_flag = getattr(parsed, "build", False)
+        no_cache_flag = getattr(parsed, "no_cache", False)
+        if build_flag or no_cache_flag:
+            params["build"] = True
+        if no_cache_flag:
+            params["no_cache"] = True
         op_req = OperationRequest(
             operation=OperationType.WORKLOAD_UPDATE,
             target=parsed.target,

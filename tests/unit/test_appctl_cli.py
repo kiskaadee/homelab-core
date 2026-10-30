@@ -107,6 +107,81 @@ def test_cli_dispatches_mutation_command():
         assert "Workload deployed" in mock_stdout.getvalue()
 
 
+def test_cli_up_and_deploy_build_and_no_cache_flags():
+    """Ensure appctl up/deploy with --build and --no-cache flags dispatches correct parameters."""
+    mock_resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_build_01",
+        operation=OperationType.WORKLOAD_DEPLOY,
+        target="jellyfin",
+        result={"action": "deployed", "message": "Workload deployed"},
+    )
+
+    # 1. up with --build
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["up", "jellyfin", "--build", "--token", "tok_secret"])
+        assert ret == 0
+        req: OperationRequest = mock_send.call_args[1]["operation_request"]
+        assert req.operation == OperationType.WORKLOAD_DEPLOY
+        assert req.parameters.get("build") is True
+        assert req.parameters.get("no_cache") is False
+
+    # 2. up with --no-cache implies build=True
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["up", "jellyfin", "--no-cache", "--token", "tok_secret"])
+        assert ret == 0
+        req = mock_send.call_args[1]["operation_request"]
+        assert req.parameters.get("no_cache") is True
+        assert req.parameters.get("build") is True
+
+    # 3. deploy alias with --no-cache
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["deploy", "jellyfin", "--no-cache", "--token", "tok_secret"])
+        assert ret == 0
+        req = mock_send.call_args[1]["operation_request"]
+        assert req.parameters.get("no_cache") is True
+        assert req.parameters.get("build") is True
+
+
+def test_cli_update_build_and_no_cache_flags():
+    """Ensure appctl update with --build and --no-cache flags dispatches correct parameters."""
+    mock_resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_upd_01",
+        operation=OperationType.WORKLOAD_UPDATE,
+        target="jellyfin",
+        result={"action": "updated", "message": "Workload updated"},
+    )
+
+    # 1. update with --build
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["update", "jellyfin", "--build", "--token", "tok_secret"])
+        assert ret == 0
+        req: OperationRequest = mock_send.call_args[1]["operation_request"]
+        assert req.operation == OperationType.WORKLOAD_UPDATE
+        assert req.parameters.get("build") is True
+        assert req.parameters.get("no_cache", False) is False
+
+    # 2. update with --no-cache implies build=True
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["update", "jellyfin", "--no-cache", "--token", "tok_secret"])
+        assert ret == 0
+        req = mock_send.call_args[1]["operation_request"]
+        assert req.parameters.get("no_cache") is True
+        assert req.parameters.get("build") is True
+
+    # 3. update with --branch and --no-cache
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["update", "jellyfin", "--branch", "main", "--no-cache", "--token", "tok_secret"])
+        assert ret == 0
+        req = mock_send.call_args[1]["operation_request"]
+        assert req.parameters.get("expected_branch") == "main"
+        assert req.parameters.get("no_cache") is True
+        assert req.parameters.get("build") is True
+
+
 def test_cli_handles_missing_socket():
     """Ensure friendly stderr message when socket is absent."""
     with patch("appctl_cli.send_daemon_request", side_effect=FileNotFoundError), patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
@@ -501,6 +576,8 @@ def test_appctl_wrapper_fast_paths_completion_without_socket(tmp_path: Path):
     )
     assert res_comp.returncode == 0
     assert "_appctl_completions()" in res_comp.stdout
+    assert "up|deploy)" in res_comp.stdout
+    assert "--build --no-cache" in res_comp.stdout
 
     res_words = subprocess.run(
         [bash_bin, str(appctl_script), "complete", "services"],

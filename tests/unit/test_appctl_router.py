@@ -411,6 +411,65 @@ def test_operational_router_dispatches_workload_deploy(
         assert "up" in mock_run.call_args[0][0]
 
 
+def test_operational_router_workload_deploy_build_flags(
+    tmp_path: Path, admin_principal: Principal, mock_workload_dir: Path
+):
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_workload_dir.parent,
+    )
+    mock_app = MagicMock()
+    mock_app.name = "snappymail"
+    mock_app.dir_path = str(mock_workload_dir)
+
+    # 1. Deploy with build=True passes --pull
+    req_build = OperationRequest.model_validate({
+        "operation": "workload.deploy",
+        "target": "snappymail",
+        "parameters": {"build": True},
+    })
+    executed_commands: list[list[str]] = []
+
+    def mock_subproc(cmd: list[str], **kwargs):
+        executed_commands.append(cmd)
+        return 0, "ok", ""
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc),
+        patch("appctl_router.cmd_sync_homepage"),
+    ):
+        resp = router.dispatch(req_build, admin_principal)
+        assert resp.success is True
+        build_calls = [c for c in executed_commands if "build" in c]
+        assert len(build_calls) == 1
+        assert build_calls[0] == [
+            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull"
+        ]
+
+    # 2. Deploy with no_cache=True passes --pull and --no-cache
+    req_no_cache = OperationRequest.model_validate({
+        "operation": "workload.deploy",
+        "target": "snappymail",
+        "parameters": {"no_cache": True},
+    })
+    executed_commands.clear()
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc),
+        patch("appctl_router.cmd_sync_homepage"),
+    ):
+        resp = router.dispatch(req_no_cache, admin_principal)
+        assert resp.success is True
+        build_calls = [c for c in executed_commands if "build" in c]
+        assert len(build_calls) == 1
+        assert build_calls[0] == [
+            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull", "--no-cache"
+        ]
+
+
 def test_operational_router_workload_update_rejects_dirty_git_tree(
     tmp_path: Path, admin_principal: Principal, mock_workload_dir: Path
 ):
@@ -525,6 +584,138 @@ def test_operational_router_workload_update_succeeds_on_clean_tree(
         # Verify git pull was called with expected branch
         pull_calls = [c for c in executed_commands if "pull" in c]
         assert len(pull_calls) == 2  # git pull and docker compose pull
+
+
+def test_operational_router_workload_update_build_and_no_cache_flags(
+    tmp_path: Path, admin_principal: Principal, mock_workload_dir: Path
+):
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_workload_dir.parent,
+    )
+    mock_app = MagicMock()
+    mock_app.name = "snappymail"
+    mock_app.dir_path = str(mock_workload_dir)
+
+    executed_commands: list[list[str]] = []
+
+    def mock_subproc(cmd: list[str], **kwargs):
+        executed_commands.append(cmd)
+        if "status" in cmd:
+            return 0, "", ""
+        if "pull" in cmd and "git" in cmd:
+            return 0, "Updating 1111..2222\nFast-forward", ""
+        if "rev-parse" in cmd:
+            return 0, "a1b2c3d", ""
+        return 0, "success", ""
+
+    # 1. Update with build=True
+    req_build = OperationRequest.model_validate({
+        "operation": "workload.update",
+        "target": "snappymail",
+        "parameters": {"build": True},
+    })
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc),
+        patch("appctl_router.cmd_sync_homepage"),
+    ):
+        resp = router.dispatch(req_build, admin_principal)
+        assert resp.success is True
+        build_calls = [c for c in executed_commands if "build" in c]
+        assert len(build_calls) == 1
+        assert build_calls[0] == [
+            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull"
+        ]
+        # Also ensure compose_up was executed
+        up_calls = [c for c in executed_commands if "up" in c]
+        assert len(up_calls) == 1
+
+    # 2. Update with no_cache=True implies build=True and appends --no-cache
+    req_no_cache = OperationRequest.model_validate({
+        "operation": "workload.update",
+        "target": "snappymail",
+        "parameters": {"no_cache": True},
+    })
+    executed_commands.clear()
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc),
+        patch("appctl_router.cmd_sync_homepage"),
+    ):
+        resp = router.dispatch(req_no_cache, admin_principal)
+        assert resp.success is True
+        build_calls = [c for c in executed_commands if "build" in c]
+        assert len(build_calls) == 1
+        assert build_calls[0] == [
+            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull", "--no-cache"
+        ]
+        up_calls = [c for c in executed_commands if "up" in c]
+        assert len(up_calls) == 1
+
+
+def test_operational_router_workload_update_declared_compose_build(
+    tmp_path: Path, admin_principal: Principal, mock_workload_dir: Path
+):
+    # Rewrite app.yaml with declared compose_build action
+    manifest_content = """
+schema_version: "1.0"
+name: "snappymail"
+source:
+  type: "git"
+  url: "https://github.com/example/snappymail.git"
+  ref: "main"
+deployment:
+  strategy: "compose"
+  actions:
+    - "git_pull"
+    - "compose_build"
+    - "compose_up"
+"""
+    (mock_workload_dir / "app.yaml").write_text(manifest_content.strip(), encoding="utf-8")
+
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_workload_dir.parent,
+    )
+    mock_app = MagicMock()
+    mock_app.name = "snappymail"
+    mock_app.dir_path = str(mock_workload_dir)
+
+    executed_commands: list[list[str]] = []
+
+    def mock_subproc(cmd: list[str], **kwargs):
+        executed_commands.append(cmd)
+        if "status" in cmd:
+            return 0, "", ""
+        if "pull" in cmd and "git" in cmd:
+            return 0, "Updating 1111..2222\nFast-forward", ""
+        if "rev-parse" in cmd:
+            return 0, "a1b2c3d", ""
+        return 0, "success", ""
+
+    # Update with declared compose_build invokes build --pull
+    req = OperationRequest.model_validate({
+        "operation": "workload.update",
+        "target": "snappymail",
+    })
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc),
+        patch("appctl_router.cmd_sync_homepage"),
+    ):
+        resp = router.dispatch(req, admin_principal)
+        assert resp.success is True
+        build_calls = [c for c in executed_commands if "build" in c]
+        assert len(build_calls) == 1
+        assert build_calls[0] == [
+            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull"
+        ]
 
 
 # ---------------------------------------------------------------------------

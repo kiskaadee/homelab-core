@@ -785,7 +785,9 @@ class OperationalRouter:
 
         # Optional build
         if params.build:
-            build_cmd = ["docker", "compose", "-f", str(compose_file), "build"]
+            build_cmd = ["docker", "compose", "-f", str(compose_file), "build", "--pull"]
+            if params.no_cache:
+                build_cmd.append("--no-cache")
             if container:
                 build_cmd.append(container)
             code, out, err = run_bounded_subprocess(build_cmd, cwd=app_dir, env=env, timeout=300.0)
@@ -928,13 +930,23 @@ class OperationalRouter:
         env = assemble_workload_env(app_dir, manifest, app.name)
         output_log = [f"git: {pull_out.strip()}"]
 
-        for action in declared_actions:
+        actions = list(declared_actions)
+        if params.build and "compose_build" not in actions:
+            if "compose_up" in actions:
+                idx = actions.index("compose_up")
+                actions.insert(idx, "compose_build")
+            else:
+                actions.append("compose_build")
+
+        for action in actions:
             if action == "git_pull":
                 continue  # already executed in step 2
             elif action == "compose_pull":
                 cmd = ["docker", "compose", "-f", str(compose_file), "pull"]
-            elif action == "compose_build" or (params.build and action == "compose_up"):
-                cmd = ["docker", "compose", "-f", str(compose_file), "build"]
+            elif action == "compose_build":
+                cmd = ["docker", "compose", "-f", str(compose_file), "build", "--pull"]
+                if params.no_cache:
+                    cmd.append("--no-cache")
             elif action == "compose_up":
                 cmd = ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"]
             elif action == "compose_restart":

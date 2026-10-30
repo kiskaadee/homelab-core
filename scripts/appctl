@@ -70,7 +70,25 @@ _appctl_completions() {
                 COMPREPLY=( $(compgen -W "$services" -- "$cur") )
             fi
             ;;
-        up|down|restart|update|pull|logs|config)
+        up|deploy)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "--build --no-cache" -- "$cur") )
+            else
+                local services
+                services=$("$appctl_cmd" complete services 2>/dev/null || appctl complete services 2>/dev/null || true)
+                COMPREPLY=( $(compgen -W "$services" -- "$cur") )
+            fi
+            ;;
+        update)
+            if [[ "$cur" == -* ]]; then
+                COMPREPLY=( $(compgen -W "--branch --build --no-cache" -- "$cur") )
+            else
+                local services
+                services=$("$appctl_cmd" complete services 2>/dev/null || appctl complete services 2>/dev/null || true)
+                COMPREPLY=( $(compgen -W "$services" -- "$cur") )
+            fi
+            ;;
+        down|restart|pull|logs|config)
             local services
             services=$("$appctl_cmd" complete services 2>/dev/null || appctl complete services 2>/dev/null || true)
             COMPREPLY=( $(compgen -W "$services" -- "$cur") )

@@ -210,12 +210,24 @@ def test_deploy_params_defaults_and_explicit_bounds():
     assert p_default.recreate is True
     assert p_default.remove_orphans is True
     assert p_default.build is False
+    assert p_default.no_cache is False
 
     # Explicit
-    p_custom = DeployParams(recreate=False, remove_orphans=False, build=True)
+    p_custom = DeployParams(recreate=False, remove_orphans=False, build=True, no_cache=False)
     assert p_custom.recreate is False
     assert p_custom.remove_orphans is False
     assert p_custom.build is True
+    assert p_custom.no_cache is False
+
+    # no_cache implies build=True
+    p_no_cache = DeployParams(no_cache=True)
+    assert p_no_cache.no_cache is True
+    assert p_no_cache.build is True
+
+    # no_cache overrides explicit build=False
+    p_override = DeployParams(build=False, no_cache=True)
+    assert p_override.no_cache is True
+    assert p_override.build is True
 
 
 def test_deploy_params_rejects_non_strict_types():
@@ -226,6 +238,8 @@ def test_deploy_params_rejects_non_strict_types():
             DeployParams(remove_orphans=bad_bool)  # type: ignore[arg-type]
         with pytest.raises(ValidationError):
             DeployParams(build=bad_bool)  # type: ignore[arg-type]
+        with pytest.raises(ValidationError):
+            DeployParams(no_cache=bad_bool)  # type: ignore[arg-type]
 
 
 def test_deploy_params_rejects_extra_fields():
@@ -238,22 +252,37 @@ def test_update_params_defaults_and_explicit():
     p_default = UpdateParams()
     assert p_default.expected_branch is None
     assert p_default.build is False
+    assert p_default.no_cache is False
 
     # Explicit
-    p_custom = UpdateParams(expected_branch="main", build=True)
+    p_custom = UpdateParams(expected_branch="main", build=True, no_cache=False)
     assert p_custom.expected_branch == "main"
     assert p_custom.build is True
+    assert p_custom.no_cache is False
+
+    # no_cache implies build=True
+    p_no_cache = UpdateParams(no_cache=True)
+    assert p_no_cache.no_cache is True
+    assert p_no_cache.build is True
+
+    # no_cache overrides explicit build=False
+    p_override = UpdateParams(build=False, no_cache=True)
+    assert p_override.no_cache is True
+    assert p_override.build is True
 
 
 def test_update_params_rejects_empty_branch_and_non_strict_types():
+    for bad_bool in ["true", "false", 1, 0, None, [True]]:
+        with pytest.raises(ValidationError):
+            UpdateParams(build=bad_bool)  # type: ignore[arg-type]
+        with pytest.raises(ValidationError):
+            UpdateParams(no_cache=bad_bool)  # type: ignore[arg-type]
+
     with pytest.raises(ValidationError):
         UpdateParams(expected_branch="")  # min_length=1
 
     with pytest.raises(ValidationError):
         UpdateParams(expected_branch=123)  # type: ignore[arg-type]
-
-    with pytest.raises(ValidationError):
-        UpdateParams(build="true")  # type: ignore[arg-type]
 
     with pytest.raises(ValidationError):
         UpdateParams.model_validate({"build": False, "extra": "prohibited"})
