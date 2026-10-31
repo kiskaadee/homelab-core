@@ -54,3 +54,6 @@ mutants/
 scripts/bootstrap_lldap_users.py
 scripts/bootstrap_*.py
 !scripts/bootstrap_token.py
+
+# Worktrees & Slices
+.worktrees/
