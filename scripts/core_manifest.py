@@ -72,10 +72,25 @@ RESERVED_ENV_KEYS = {
     "SITES_DIR",
     "ENV_FILE",
     "HOMESERVER_ENV",
+    "HOMELAB_DOMAIN",
+    "DOMAIN_SUFFIX",
+    "DOMAIN",
+    "PROXY_NETWORK",
+    "CERT_RESOLVER",
+    "DOCKER_CONFIG",
+    "SERVICE_NAME",
+    "CONTAINER_NAME",
+    "SERVICE_DOMAIN",
 }
 
 ALLOWED_STRATEGIES = {"compose"}
-ALLOWED_ACTIONS = {"git_pull", "compose_pull", "compose_up", "compose_build", "compose_restart"}
+ALLOWED_ACTIONS = {
+    "git_pull",
+    "compose_pull",
+    "compose_up",
+    "compose_build",
+    "compose_restart",
+}
 
 
 def validate_transport(url: str) -> tuple[TransportScheme, str]:
@@ -168,12 +183,10 @@ def classify_ref(ref_str: str) -> tuple[RefType, str]:
     return RefType.BRANCH, ref
 
 
-
 class SourceConfig(BaseModel):
     """Upstream source provenance descriptor."""
 
     model_config = ConfigDict(extra="forbid", ignored_types=(dict,))
-
 
     url: str
     ref: str = "main"
@@ -223,7 +236,6 @@ class DeploymentConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", ignored_types=(dict,))
 
-
     strategy: str = "compose"
     branch: str = "main"
     actions: list[str] = Field(default_factory=lambda: ["git_pull", "compose_up"])
@@ -264,7 +276,6 @@ class HomepageConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid", ignored_types=(dict,))
 
-
     title: str
     group: str = "Applications"
     icon: str = "default.png"
@@ -294,7 +305,6 @@ class Manifest(BaseModel):
         populate_by_name=True,
         ignored_types=(dict,),
     )
-
 
     name: str
     schema_version: str = Field(default="1.0", alias="schemaVersion")

@@ -66,7 +66,9 @@ def test_validate_transport_rejects_http(insecure_url: str):
     ],
 )
 def test_validate_transport_rejects_empty_or_non_string(empty_or_invalid_url):
-    with pytest.raises(ManifestValidationError, match=r"^Source URL cannot be empty\.$"):
+    with pytest.raises(
+        ManifestValidationError, match=r"^Source URL cannot be empty\.$"
+    ):
         validate_transport(empty_or_invalid_url)  # type: ignore[arg-type]
 
 
@@ -77,7 +79,9 @@ def test_validate_transport_rejects_empty_or_non_string(empty_or_invalid_url):
         ("ssh://git.example.com/", "SSH"),
     ],
 )
-def test_validate_transport_rejects_root_repository_path(root_path_url: str, scheme: str):
+def test_validate_transport_rejects_root_repository_path(
+    root_path_url: str, scheme: str
+):
     with pytest.raises(
         ManifestValidationError,
         match=rf"^Malformed {scheme} source URL \(missing repository path\)",
@@ -132,8 +136,10 @@ def test_classify_ref_branches():
         "feat/manifest-engine",
     )
     assert classify_ref("release/v1.0") == (RefType.BRANCH, "release/v1.0")
-    assert classify_ref("custom-adhoc-branch") == (RefType.BRANCH, "custom-adhoc-branch")
-
+    assert classify_ref("custom-adhoc-branch") == (
+        RefType.BRANCH,
+        "custom-adhoc-branch",
+    )
 
 
 def test_classify_ref_tags():
@@ -271,6 +277,15 @@ def test_parse_manifest_from_path(tmp_path: Path):
         "IFS",
         "CORE_DIR",
         "SITES_DIR",
+        "HOMELAB_DOMAIN",
+        "DOMAIN_SUFFIX",
+        "DOMAIN",
+        "PROXY_NETWORK",
+        "CERT_RESOLVER",
+        "DOCKER_CONFIG",
+        "SERVICE_NAME",
+        "CONTAINER_NAME",
+        "SERVICE_DOMAIN",
     ],
 )
 def test_parse_manifest_rejects_invalid_or_reserved_env_keys(invalid_key: str):
