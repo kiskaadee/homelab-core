@@ -1068,3 +1068,95 @@ services:
     )
     assert valid is False
     assert err is not None and "security_opt" in err.lower()
+
+
+def test_validate_compose_security_rejects_dict_volume_without_type_bind(
+    tmp_path: Path,
+):
+    """Ensure dictionary volume declarations without explicit type: bind enforce host containment (CR-DI-01)."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text(
+        """
+services:
+  app:
+    image: alpine
+    volumes:
+      - source: /etc/shadow
+        target: /app/shadow
+""",
+        encoding="utf-8",
+    )
+    valid, err = gitops_dispatcher.validate_compose_security(
+        compose_file, tmp_path, app_name="my-app"
+    )
+    assert valid is False
+    assert err is not None and "prohibited host bind mount" in err.lower()
+
+
+def test_validate_compose_security_rejects_variable_interpolation_in_volume_host_path(
+    tmp_path: Path,
+):
+    """Ensure volume host paths containing variable interpolation (${...}) fail closed (CR-DI-02)."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text(
+        """
+services:
+  app:
+    image: alpine
+    volumes:
+      - "${HOST_DIR}/data:/data"
+""",
+        encoding="utf-8",
+    )
+    valid, err = gitops_dispatcher.validate_compose_security(
+        compose_file, tmp_path, app_name="my-app"
+    )
+    assert valid is False
+    assert err is not None and "variable interpolation" in err.lower()
+
+
+def test_validate_compose_security_rejects_variable_interpolation_in_dict_volume_source(
+    tmp_path: Path,
+):
+    """Ensure dictionary volume source containing variable interpolation (${...}) fails closed (CR-DI-02)."""
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text(
+        """
+services:
+  app:
+    image: alpine
+    volumes:
+      - source: "${HOST_DIR}/data"
+        target: /data
+""",
+        encoding="utf-8",
+    )
+    valid, err = gitops_dispatcher.validate_compose_security(
+        compose_file, tmp_path, app_name="my-app"
+    )
+    assert valid is False
+    assert err is not None and "variable interpolation" in err.lower()
+
+
+def test_validate_compose_security_allows_valid_dict_volume_within_workload(
+    tmp_path: Path,
+):
+    """Ensure valid dictionary volume within workload root is accepted even without type: bind."""
+    (tmp_path / "data").mkdir()
+    compose_file = tmp_path / "docker-compose.yml"
+    compose_file.write_text(
+        """
+services:
+  app:
+    image: alpine
+    volumes:
+      - source: ./data
+        target: /data
+""",
+        encoding="utf-8",
+    )
+    valid, err = gitops_dispatcher.validate_compose_security(
+        compose_file, tmp_path, app_name="my-app"
+    )
+    assert valid is True
+    assert err is None

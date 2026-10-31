@@ -110,7 +110,9 @@ def execute_deployment_via_daemon(
             timeout=330.0,
         )
         if resp.success:
-            logger.info(f"✨ Deployment of '{target}' via daemon completed successfully.")
+            logger.info(
+                f"✨ Deployment of '{target}' via daemon completed successfully."
+            )
             return True
         err_msg = resp.error.message if resp.error else "Unknown daemon error"
         logger.error(f"❌ Deployment of '{target}' via daemon failed: {err_msg}")
@@ -286,7 +288,7 @@ def get_trusted_repository_mapping() -> dict[str, Path]:
                 if not raw_path:
                     continue
                 if raw_path.startswith("~/Sites/") or raw_path == "~/Sites":
-                    sub = raw_path[len("~/Sites"):].lstrip("/")
+                    sub = raw_path[len("~/Sites") :].lstrip("/")
                     p = (SITES_DIR / sub).resolve() if sub else SITES_DIR.resolve()
                 else:
                     p = Path(raw_path).expanduser().resolve()
@@ -405,8 +407,6 @@ def resolve_target(repo_name: str) -> tuple[Path | None, dict]:
         deployment_config = {"branch": "main", "actions": ["git_pull", "compose_up"]}
 
     return target_dir, deployment_config
-
-
 
 
 PROHIBITED_HOST_NAMESPACES = {"host"}
@@ -607,6 +607,8 @@ def validate_compose_security(
                         )
                     if ":" in vol:
                         host_path = vol.split(":")[0].strip()
+                    else:
+                        host_path = vol.strip()
                 elif isinstance(vol, dict):
                     src = str(vol.get("source", ""))
                     if "/var/run/docker.sock" in src:
@@ -614,11 +616,18 @@ def validate_compose_security(
                             False,
                             f"Service '{svc_name}' directly mounts Docker socket: {src}.",
                         )
-                    if vol.get("type") == "bind":
+                    vol_type = vol.get("type")
+                    if vol_type in ("bind", "volume") or (vol_type is None and src):
                         host_path = src
 
                 if not host_path:
                     continue
+
+                if "${" in host_path or "}" in host_path:
+                    return (
+                        False,
+                        f"Service '{svc_name}' specifies prohibited variable interpolation in volume host path: '{host_path}'.",
+                    )
 
                 # Declared top-level named volume without path separators
                 if host_path in top_volumes and not (
