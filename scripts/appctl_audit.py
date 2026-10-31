@@ -28,7 +28,7 @@ DEFAULT_AUDIT_LOG = Path("/var/log/homelab/appctl/audit.jsonl")
 DEFAULT_LOCK_DIR = Path("/var/lib/homelab/appctl/locks")
 
 REDACT_KEY_PATTERNS = re.compile(
-    r".*(?:_KEY|_SECRET|_PASSWORD|_TOKEN|_PASS|_HASH)$", re.IGNORECASE
+    r"^(?:.*_)?(?:KEY|SECRET|PASSWORD|TOKEN|PASS|HASH)$", re.IGNORECASE
 )
 
 
@@ -105,7 +105,9 @@ class ConcurrentMutationError(Exception):
 
     def __init__(self, target: str, message: str | None = None) -> None:
         self.target = target
-        msg = message or f"Operation on target '{target}' is locked by a concurrent task."
+        msg = (
+            message or f"Operation on target '{target}' is locked by a concurrent task."
+        )
         super().__init__(msg)
 
 
@@ -116,7 +118,9 @@ def redact_sensitive_data(val: Any) -> Any:
     """
     if isinstance(val, dict):
         return {
-            k: "[REDACTED]" if REDACT_KEY_PATTERNS.match(str(k)) else redact_sensitive_data(v)
+            k: "[REDACTED]"
+            if REDACT_KEY_PATTERNS.match(str(k))
+            else redact_sensitive_data(v)
             for k, v in val.items()
         }
     if isinstance(val, list):

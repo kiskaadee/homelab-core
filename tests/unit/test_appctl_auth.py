@@ -37,8 +37,12 @@ def secret_tokens() -> dict[str, str]:
 @pytest.fixture
 def temp_tokens_file(tmp_path: Path, secret_tokens: dict[str, str]) -> Path:
     tokens_path = tmp_path / "tokens.json"
-    admin_hash = hashlib.sha256(secret_tokens["admin_secret"].encode("utf-8")).hexdigest()
-    op_hash = hashlib.sha256(secret_tokens["operator_secret"].encode("utf-8")).hexdigest()
+    admin_hash = hashlib.sha256(
+        secret_tokens["admin_secret"].encode("utf-8")
+    ).hexdigest()
+    op_hash = hashlib.sha256(
+        secret_tokens["operator_secret"].encode("utf-8")
+    ).hexdigest()
 
     data = [
         {
@@ -121,6 +125,31 @@ def test_token_store_authenticates_valid_bearer_secrets(
     assert p_op.token_id == "tok_gitops_01"
 
 
+def test_token_store_authenticates_uppercase_hex_descriptor(tmp_path: Path):
+    """Ensure tokens with uppercase hex characters in tokens.json authenticate cleanly (CR-DI-10)."""
+    raw_secret = "my_custom_secret_token"
+    raw_hash_upper = hashlib.sha256(raw_secret.encode("utf-8")).hexdigest().upper()
+    tokens_file = tmp_path / "upper_tokens.json"
+    tokens_file.write_text(
+        json.dumps(
+            [
+                {
+                    "token_id": "tok_upper_01",
+                    "identity": "upper-user",
+                    "role": "homelab-operator",
+                    "sha256": raw_hash_upper,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(tokens_file, 0o400)
+    store = TokenStore(tokens_file)
+    principal = store.authenticate_bearer(raw_secret)
+    assert principal.identity == "upper-user"
+    assert principal.role == Role.OPERATOR
+
+
 def test_token_store_rejects_invalid_bearer_secret(temp_tokens_file: Path):
     store = TokenStore(temp_tokens_file)
 
@@ -178,7 +207,9 @@ def test_authenticate_request_over_uds_falls_back_to_viewer(
 
     # Explicit Bearer token over UDS confers full privileges
     auth_header = f"Bearer {secret_tokens['admin_secret']}"
-    p_admin = authenticate_request("unix_socket", auth_header, peer_uid=1000, token_store=store)
+    p_admin = authenticate_request(
+        "unix_socket", auth_header, peer_uid=1000, token_store=store
+    )
     assert p_admin.role == Role.ADMIN
     assert p_admin.auth_method == "bearer_token"
 
@@ -196,7 +227,8 @@ def test_authenticate_request_over_uds_rejects_missing_peer_uid():
 
 def test_load_admitted_workloads_parses_names_and_aliases(tmp_path: Path):
     deploy_file = tmp_path / "deployments.yaml"
-    deploy_file.write_text("""
+    deploy_file.write_text(
+        """
 schemaVersion: "1.0"
 repositories:
   snappymail:
@@ -208,7 +240,9 @@ repositories:
     path: "/home/operator/Sites/homelab-jellyfin"
     aliases:
       - "media"
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     admitted = load_admitted_workloads(deploy_file)
     assert "snappymail" in admitted
@@ -221,14 +255,19 @@ repositories:
 
 def test_load_admitted_workloads_handles_aliases_edge_cases_and_json(tmp_path: Path):
     deploy_file = tmp_path / "deployments.json"
-    deploy_file.write_text(json.dumps({
-        "repositories": {
-            "app1": {
-                "path": "/home/operator/Sites/app1",
-                "aliases": [123, None, "   ", "valid_alias"]
+    deploy_file.write_text(
+        json.dumps(
+            {
+                "repositories": {
+                    "app1": {
+                        "path": "/home/operator/Sites/app1",
+                        "aliases": [123, None, "   ", "valid_alias"],
+                    }
+                }
             }
-        }
-    }), encoding="utf-8")
+        ),
+        encoding="utf-8",
+    )
 
     admitted = load_admitted_workloads(deploy_file)
     assert "app1" in admitted
@@ -238,13 +277,17 @@ def test_load_admitted_workloads_handles_aliases_edge_cases_and_json(tmp_path: P
     assert "" not in admitted
 
 
-def test_load_admitted_workloads_fails_closed_on_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_load_admitted_workloads_fails_closed_on_missing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     admitted = load_admitted_workloads(tmp_path / "missing.yaml")
     assert admitted == set()
 
     # Test HOMELAB_DEPLOYMENTS_FILE fallback
     deploy_file = tmp_path / "env_deploy.yaml"
-    deploy_file.write_text("repositories:\n  env_app:\n    path: /sites/env_app\n", encoding="utf-8")
+    deploy_file.write_text(
+        "repositories:\n  env_app:\n    path: /sites/env_app\n", encoding="utf-8"
+    )
     monkeypatch.setenv("HOMELAB_DEPLOYMENTS_FILE", str(deploy_file))
     admitted_env = load_admitted_workloads(None)
     assert "env_app" in admitted_env
@@ -258,12 +301,16 @@ def test_load_admitted_workloads_fails_closed_on_missing_file(tmp_path: Path, mo
 def test_rbac_admin_permitted_across_all_operations_and_targets(
     admitted_workloads: set[str],
 ):
-    admin = Principal(identity="admin_user", role=Role.ADMIN, auth_method="bearer_token")
+    admin = Principal(
+        identity="admin_user", role=Role.ADMIN, auth_method="bearer_token"
+    )
 
     # Mutations across Core and Sites
     enforce_rbac(admin, OperationType.WORKLOAD_DEPLOY, "core", admitted_workloads)
     enforce_rbac(admin, OperationType.WORKLOAD_DEPLOY, "traefik", admitted_workloads)
-    enforce_rbac(admin, OperationType.WORKLOAD_DEPLOY, "unregistered_site", admitted_workloads)
+    enforce_rbac(
+        admin, OperationType.WORKLOAD_DEPLOY, "unregistered_site", admitted_workloads
+    )
     enforce_rbac(admin, OperationType.WORKLOAD_CONFIG, "core", admitted_workloads)
     enforce_rbac(admin, OperationType.WORKLOAD_LOGS, "traefik", admitted_workloads)
     enforce_rbac(admin, OperationType.PLATFORM_SYNC_HOMEPAGE, None, admitted_workloads)
@@ -273,79 +320,128 @@ def test_rbac_admin_permitted_across_all_operations_and_targets(
 def test_rbac_operator_permitted_on_admitted_workloads(
     admitted_workloads: set[str],
 ):
-    operator = Principal(identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token")
+    operator = Principal(
+        identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token"
+    )
 
     # Permitted on admitted workload
-    enforce_rbac(operator, OperationType.WORKLOAD_DEPLOY, "snappymail", admitted_workloads)
+    enforce_rbac(
+        operator, OperationType.WORKLOAD_DEPLOY, "snappymail", admitted_workloads
+    )
     enforce_rbac(operator, OperationType.WORKLOAD_UPDATE, "mail", admitted_workloads)
-    enforce_rbac(operator, OperationType.WORKLOAD_CONFIG, "jellyfin", admitted_workloads)
+    enforce_rbac(
+        operator, OperationType.WORKLOAD_CONFIG, "jellyfin", admitted_workloads
+    )
     enforce_rbac(operator, OperationType.WORKLOAD_LOGS, "docs", admitted_workloads)
-    enforce_rbac(operator, OperationType.PLATFORM_SYNC_HOMEPAGE, None, admitted_workloads)
+    enforce_rbac(
+        operator, OperationType.PLATFORM_SYNC_HOMEPAGE, None, admitted_workloads
+    )
     enforce_rbac(operator, OperationType.WORKLOAD_LIST, None, admitted_workloads)
 
 
 def test_rbac_operator_denied_on_core_targets(
     admitted_workloads: set[str],
 ):
-    operator = Principal(identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token")
+    operator = Principal(
+        identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token"
+    )
 
     # Targeting "core" stack
     with pytest.raises(AuthorizationError) as exc_info:
-        enforce_rbac(operator, OperationType.WORKLOAD_DEPLOY, "core", admitted_workloads)
+        enforce_rbac(
+            operator, OperationType.WORKLOAD_DEPLOY, "core", admitted_workloads
+        )
     assert "not permitted to target core service 'core'" in str(exc_info.value)
     assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
 
     # Targeting core services (traefik, stalwart, etc.)
     for core_svc in ["traefik", "authelia", "stalwart", "socket-proxy"]:
         with pytest.raises(AuthorizationError) as exc_info:
-            enforce_rbac(operator, OperationType.WORKLOAD_RESTART, core_svc, admitted_workloads)
-        assert f"not permitted to target core service '{core_svc}'" in str(exc_info.value)
+            enforce_rbac(
+                operator, OperationType.WORKLOAD_RESTART, core_svc, admitted_workloads
+            )
+        assert f"not permitted to target core service '{core_svc}'" in str(
+            exc_info.value
+        )
         assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
 
 
 def test_rbac_operator_denied_without_target_on_mutating_or_sensitive_ops(
     admitted_workloads: set[str],
 ):
-    operator = Principal(identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token")
+    operator = Principal(
+        identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token"
+    )
 
-    for op in [OperationType.WORKLOAD_DEPLOY, OperationType.WORKLOAD_UPDATE, OperationType.WORKLOAD_CONFIG, OperationType.WORKLOAD_LOGS]:
+    for op in [
+        OperationType.WORKLOAD_DEPLOY,
+        OperationType.WORKLOAD_UPDATE,
+        OperationType.WORKLOAD_CONFIG,
+        OperationType.WORKLOAD_LOGS,
+    ]:
         with pytest.raises(AuthorizationError) as exc_info:
             enforce_rbac(operator, op, None, admitted_workloads)
-        assert f"Operation '{op.value}' requires an explicit workload target" in str(exc_info.value)
+        assert f"Operation '{op.value}' requires an explicit workload target" in str(
+            exc_info.value
+        )
         assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
 
         with pytest.raises(AuthorizationError) as exc_info:
             enforce_rbac(operator, op, "", admitted_workloads)
-        assert f"Operation '{op.value}' requires an explicit workload target" in str(exc_info.value)
+        assert f"Operation '{op.value}' requires an explicit workload target" in str(
+            exc_info.value
+        )
         assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
 
 
-def test_rbac_operator_with_default_admitted_workloads(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+def test_rbac_operator_with_default_admitted_workloads(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
     deployments_file = tmp_path / "deployments.yaml"
-    deployments_file.write_text("repositories:\n  customapp:\n    path: ~/Sites/customapp\n", encoding="utf-8")
+    deployments_file.write_text(
+        "repositories:\n  customapp:\n    path: ~/Sites/customapp\n", encoding="utf-8"
+    )
     monkeypatch.setenv("HOMELAB_DEPLOYMENTS_FILE", str(deployments_file))
 
-    operator = Principal(identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token")
-    enforce_rbac(operator, OperationType.WORKLOAD_DEPLOY, "customapp", admitted_workloads=None)
+    operator = Principal(
+        identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token"
+    )
+    enforce_rbac(
+        operator, OperationType.WORKLOAD_DEPLOY, "customapp", admitted_workloads=None
+    )
 
     with pytest.raises(AuthorizationError) as exc_info:
-        enforce_rbac(operator, OperationType.WORKLOAD_DEPLOY, "unknownapp", admitted_workloads=None)
+        enforce_rbac(
+            operator,
+            OperationType.WORKLOAD_DEPLOY,
+            "unknownapp",
+            admitted_workloads=None,
+        )
     assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
 
 
 def test_rbac_operator_denied_on_unregistered_workload(
     admitted_workloads: set[str],
 ):
-    operator = Principal(identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token")
+    operator = Principal(
+        identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token"
+    )
 
     with pytest.raises(AuthorizationError) as exc_info:
-        enforce_rbac(operator, OperationType.WORKLOAD_DEPLOY, "unregistered_app", admitted_workloads)
+        enforce_rbac(
+            operator,
+            OperationType.WORKLOAD_DEPLOY,
+            "unregistered_app",
+            admitted_workloads,
+        )
     assert "not registered in deployments.yaml" in str(exc_info.value)
     assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
 
 
 def test_rbac_viewer_permitted_only_on_non_sensitive_reads():
-    viewer = Principal(identity="unix_uid_1000", role=Role.VIEWER, auth_method="unix_peercred")
+    viewer = Principal(
+        identity="unix_uid_1000", role=Role.VIEWER, auth_method="unix_peercred"
+    )
 
     # Permitted reads
     enforce_rbac(viewer, OperationType.WORKLOAD_LIST, None)
@@ -356,7 +452,9 @@ def test_rbac_viewer_permitted_only_on_non_sensitive_reads():
 
 
 def test_rbac_viewer_denied_on_mutations():
-    viewer = Principal(identity="unix_uid_1000", role=Role.VIEWER, auth_method="unix_peercred")
+    viewer = Principal(
+        identity="unix_uid_1000", role=Role.VIEWER, auth_method="unix_peercred"
+    )
 
     mutations = [
         OperationType.WORKLOAD_DEPLOY,
@@ -374,7 +472,9 @@ def test_rbac_viewer_denied_on_mutations():
 
 
 def test_rbac_viewer_denied_on_sensitive_reads():
-    viewer = Principal(identity="unix_uid_1000", role=Role.VIEWER, auth_method="unix_peercred")
+    viewer = Principal(
+        identity="unix_uid_1000", role=Role.VIEWER, auth_method="unix_peercred"
+    )
 
     for sens_op in [OperationType.WORKLOAD_CONFIG, OperationType.WORKLOAD_LOGS]:
         with pytest.raises(AuthorizationError) as exc_info:

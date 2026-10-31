@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+import yaml
 from appctl_audit import (
     AuditLogger,
     AuditPersistenceError,
@@ -208,6 +209,18 @@ def assemble_workload_env(
         if local_env.is_file():
             env.update(parse_dotenv(local_env, validate_keys=True))
 
+    # Re-assert immutable platform infrastructure keys (defense-in-depth)
+    env["HOMELAB_DOMAIN"] = domain
+    env["DOMAIN_SUFFIX"] = domain
+    env["DOMAIN"] = domain
+    env["PROXY_NETWORK"] = os.environ.get("PROXY_NETWORK", "proxy-net")
+    env["CERT_RESOLVER"] = os.environ.get("CERT_RESOLVER", "myresolver")
+    env["SERVICE_NAME"] = app_name
+    env["CONTAINER_NAME"] = app_name
+    env["SERVICE_DOMAIN"] = f"{app_name}.{domain}"
+    if "DOCKER_CONFIG" in os.environ:
+        env["DOCKER_CONFIG"] = os.environ["DOCKER_CONFIG"]
+
     return env
 
 
@@ -290,7 +303,9 @@ def validate_workload_preflight(
     try:
         manifest = parse_manifest(manifest_file)
     except ManifestValidationError as err:
-        raise RouterValidationError(f"Workload manifest validation failed: {err}") from err
+        raise RouterValidationError(
+            f"Workload manifest validation failed: {err}"
+        ) from err
 
     effective_name = app_name or manifest.name
     compose_file = _resolve_compose_file(app_dir)
@@ -328,7 +343,9 @@ def validate_core_preflight(
     if not compose_file.is_file():
         raise RouterValidationError(f"Core compose file not found at '{compose_file}'")
 
-    if compose_file.is_symlink() and not compose_file.resolve().is_relative_to(core_dir_resolved):
+    if compose_file.is_symlink() and not compose_file.resolve().is_relative_to(
+        core_dir_resolved
+    ):
         raise RouterValidationError(
             f"Core compose file symlink escapes Core root: '{compose_file}'"
         )
@@ -592,7 +609,9 @@ class OperationalRouter:
             elif operation == OperationType.WORKLOAD_PULL:
                 result_data = self._op_workload_pull(resolved_app)
             elif operation == OperationType.WORKLOAD_UPDATE:
-                result_data, commit_sha = self._op_workload_update(request, resolved_app)
+                result_data, commit_sha = self._op_workload_update(
+                    request, resolved_app
+                )
             elif operation == OperationType.PLATFORM_SYNC_HOMEPAGE:
                 result_data = self._op_platform_sync_homepage()
             else:
@@ -601,7 +620,10 @@ class OperationalRouter:
             duration_ms = int((time.perf_counter() - start_time) * 1000)
 
             # Audit COMPLETED for mutating ops and sensitive reads
-            if operation in MUTATING_OPERATIONS or operation in SENSITIVE_READ_OPERATIONS:
+            if (
+                operation in MUTATING_OPERATIONS
+                or operation in SENSITIVE_READ_OPERATIONS
+            ):
                 self.audit_logger.log_completed(
                     operation_id=op_id,
                     principal=principal_audit,
@@ -613,7 +635,9 @@ class OperationalRouter:
                     parameters=request.parameters,
                     duration_ms=duration_ms,
                     commit_sha=commit_sha,
-                    message=result_data.get("message", "Operation completed successfully"),
+                    message=result_data.get(
+                        "message", "Operation completed successfully"
+                    ),
                 )
 
             return OperationResponse(
@@ -630,7 +654,10 @@ class OperationalRouter:
 
         except (RouterValidationError, RouterExecutionError) as err:
             duration_ms = int((time.perf_counter() - start_time) * 1000)
-            if operation in MUTATING_OPERATIONS or operation in SENSITIVE_READ_OPERATIONS:
+            if (
+                operation in MUTATING_OPERATIONS
+                or operation in SENSITIVE_READ_OPERATIONS
+            ):
                 self.audit_logger.log_failed(
                     operation_id=op_id,
                     principal=principal_audit,
@@ -699,7 +726,9 @@ class OperationalRouter:
                     dir_path=self.core_dir,
                     container_name=svc.container_name,
                 )
-                svc_dict["deployment_status"] = core_checkout.status_label if i == 0 else ""
+                svc_dict["deployment_status"] = (
+                    core_checkout.status_label if i == 0 else ""
+                )
                 svc_dict["provenance_status"] = "— Core Platform"
                 if params.ssl and not svc.is_internal:
                     svc_dict["ssl"] = check_ssl_cert(svc.domain)
@@ -726,9 +755,14 @@ class OperationalRouter:
         domain = target or resolve_canonical_domain()
         try:
             cert_info = check_ssl_cert(domain)
-            return {"ssl": cert_info, "message": f"SSL certificate inspected for {domain}"}
+            return {
+                "ssl": cert_info,
+                "message": f"SSL certificate inspected for {domain}",
+            }
         except Exception as err:
-            raise RouterExecutionError(f"SSL inspection failed for '{domain}': {err}") from err
+            raise RouterExecutionError(
+                f"SSL inspection failed for '{domain}': {err}"
+            ) from err
 
     def _op_platform_health(self) -> dict[str, Any]:
         return {
@@ -742,14 +776,24 @@ class OperationalRouter:
         app_dir, _, compose_file, env, _ = self._prepare_target_context(app)
 
         cmd = ["docker", "compose", "-f", str(compose_file), "config"]
-        code, stdout, stderr = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=15.0)
+        code, stdout, stderr = run_bounded_subprocess(
+            cmd, cwd=app_dir, env=env, timeout=15.0
+        )
         if code != 0:
-            raise RouterExecutionError(f"docker compose config failed: {stderr}", exit_code=code)
+            raise RouterExecutionError(
+                f"docker compose config failed: {stderr}", exit_code=code
+            )
 
         config_output = stdout
         if principal.role != Role.ADMIN:
             # Redact secrets for non-admin callers
-            config_output = redact_sensitive_data(config_output)
+            try:
+                parsed_yaml = yaml.safe_load(stdout)
+                if isinstance(parsed_yaml, (dict, list)):
+                    redacted_parsed = redact_sensitive_data(parsed_yaml)
+                    config_output = yaml.safe_dump(redacted_parsed, sort_keys=False)
+            except (yaml.YAMLError, ValueError):
+                config_output = redact_sensitive_data(config_output)
 
         return {"output": config_output, "message": "Evaluated compose configuration"}
 
@@ -771,13 +815,23 @@ class OperationalRouter:
         if container:
             cmd.append(container)
 
-        code, stdout, stderr = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=15.0)
+        code, stdout, stderr = run_bounded_subprocess(
+            cmd, cwd=app_dir, env=env, timeout=15.0
+        )
         if code != 0:
-            raise RouterExecutionError(f"docker compose logs failed: {stderr}", exit_code=code)
+            raise RouterExecutionError(
+                f"docker compose logs failed: {stderr}", exit_code=code
+            )
 
-        return {"output": stdout, "tail": params.tail, "message": f"Tail {params.tail} logs"}
+        return {
+            "output": stdout,
+            "tail": params.tail,
+            "message": f"Tail {params.tail} logs",
+        }
 
-    def _op_workload_deploy(self, request: OperationRequest, app: Any) -> dict[str, Any]:
+    def _op_workload_deploy(
+        self, request: OperationRequest, app: Any
+    ) -> dict[str, Any]:
         params = request.parse_parameters()
         assert isinstance(params, DeployParams)
         app_dir, _, compose_file, env, container = self._prepare_target_context(app)
@@ -785,14 +839,25 @@ class OperationalRouter:
 
         # Optional build
         if params.build:
-            build_cmd = ["docker", "compose", "-f", str(compose_file), "build", "--pull"]
+            build_cmd = [
+                "docker",
+                "compose",
+                "-f",
+                str(compose_file),
+                "build",
+                "--pull",
+            ]
             if params.no_cache:
                 build_cmd.append("--no-cache")
             if container:
                 build_cmd.append(container)
-            code, out, err = run_bounded_subprocess(build_cmd, cwd=app_dir, env=env, timeout=300.0)
+            code, out, err = run_bounded_subprocess(
+                build_cmd, cwd=app_dir, env=env, timeout=300.0
+            )
             if code != 0:
-                raise RouterExecutionError(f"docker compose build failed: {err}", exit_code=code)
+                raise RouterExecutionError(
+                    f"docker compose build failed: {err}", exit_code=code
+                )
 
         # Deploy up
         up_cmd = ["docker", "compose", "-f", str(compose_file), "up", "-d"]
@@ -801,9 +866,13 @@ class OperationalRouter:
         if container:
             up_cmd.append(container)
 
-        code, out, err = run_bounded_subprocess(up_cmd, cwd=app_dir, env=env, timeout=300.0)
+        code, out, err = run_bounded_subprocess(
+            up_cmd, cwd=app_dir, env=env, timeout=300.0
+        )
         if code != 0:
-            raise RouterExecutionError(f"docker compose up failed: {err}", exit_code=code)
+            raise RouterExecutionError(
+                f"docker compose up failed: {err}", exit_code=code
+            )
 
         # Trigger Homepage sync for Sites workloads
         if not is_core:
@@ -824,13 +893,21 @@ class OperationalRouter:
         else:
             cmd = ["docker", "compose", "-f", str(compose_file), "down"]
 
-        code, out, err = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=300.0)
+        code, out, err = run_bounded_subprocess(
+            cmd, cwd=app_dir, env=env, timeout=300.0
+        )
         if code != 0:
-            raise RouterExecutionError(f"docker compose stop/down failed: {err}", exit_code=code)
+            raise RouterExecutionError(
+                f"docker compose stop/down failed: {err}", exit_code=code
+            )
 
         if not is_core:
             self._trigger_homepage_sync()
-        return {"output": out, "action": "stopped", "message": f"Workload '{app.name}' stopped"}
+        return {
+            "output": out,
+            "action": "stopped",
+            "message": f"Workload '{app.name}' stopped",
+        }
 
     def _op_workload_restart(self, app: Any) -> dict[str, Any]:
         app_dir, _, compose_file, env, container = self._prepare_target_context(app)
@@ -840,13 +917,21 @@ class OperationalRouter:
         if container:
             cmd.append(container)
 
-        code, out, err = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=300.0)
+        code, out, err = run_bounded_subprocess(
+            cmd, cwd=app_dir, env=env, timeout=300.0
+        )
         if code != 0:
-            raise RouterExecutionError(f"docker compose restart failed: {err}", exit_code=code)
+            raise RouterExecutionError(
+                f"docker compose restart failed: {err}", exit_code=code
+            )
 
         if not is_core:
             self._trigger_homepage_sync()
-        return {"output": out, "action": "restarted", "message": f"Workload '{app.name}' restarted"}
+        return {
+            "output": out,
+            "action": "restarted",
+            "message": f"Workload '{app.name}' restarted",
+        }
 
     def _op_workload_pull(self, app: Any) -> dict[str, Any]:
         app_dir, _, compose_file, env, container = self._prepare_target_context(app)
@@ -855,20 +940,40 @@ class OperationalRouter:
         pull_cmd = ["docker", "compose", "-f", str(compose_file), "pull"]
         if container:
             pull_cmd.append(container)
-        code, _, err = run_bounded_subprocess(pull_cmd, cwd=app_dir, env=env, timeout=300.0)
+        code, _, err = run_bounded_subprocess(
+            pull_cmd, cwd=app_dir, env=env, timeout=300.0
+        )
         if code != 0:
-            raise RouterExecutionError(f"docker compose pull failed: {err}", exit_code=code)
+            raise RouterExecutionError(
+                f"docker compose pull failed: {err}", exit_code=code
+            )
 
-        up_cmd = ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"]
+        up_cmd = [
+            "docker",
+            "compose",
+            "-f",
+            str(compose_file),
+            "up",
+            "-d",
+            "--remove-orphans",
+        ]
         if container:
             up_cmd.append(container)
-        code, out_up, err_up = run_bounded_subprocess(up_cmd, cwd=app_dir, env=env, timeout=300.0)
+        code, out_up, err_up = run_bounded_subprocess(
+            up_cmd, cwd=app_dir, env=env, timeout=300.0
+        )
         if code != 0:
-            raise RouterExecutionError(f"docker compose up failed after pull: {err_up}", exit_code=code)
+            raise RouterExecutionError(
+                f"docker compose up failed after pull: {err_up}", exit_code=code
+            )
 
         if not is_core:
             self._trigger_homepage_sync()
-        return {"output": out_up, "action": "pulled", "message": f"Workload '{app.name}' pulled and updated"}
+        return {
+            "output": out_up,
+            "action": "pulled",
+            "message": f"Workload '{app.name}' pulled and updated",
+        }
 
     def _op_workload_update(
         self, request: OperationRequest, app: Any
@@ -906,7 +1011,9 @@ class OperationalRouter:
             pull_cmd, cwd=app_dir, timeout=60.0
         )
         if code != 0:
-            raise RouterExecutionError(f"git pull failed for '{app.name}': {pull_err}", exit_code=code)
+            raise RouterExecutionError(
+                f"git pull failed for '{app.name}': {pull_err}", exit_code=code
+            )
 
         # 3. Post-pull re-validation of manifest and expected_branch
         if is_core:
@@ -914,7 +1021,9 @@ class OperationalRouter:
             manifest = None
             declared_actions = ["compose_pull", "compose_up"]
         else:
-            manifest, compose_file = validate_workload_preflight(app_dir, self.sites_dir, app.name)
+            manifest, compose_file = validate_workload_preflight(
+                app_dir, self.sites_dir, app.name
+            )
             if (
                 params.expected_branch
                 and manifest.source
@@ -948,7 +1057,15 @@ class OperationalRouter:
                 if params.no_cache:
                     cmd.append("--no-cache")
             elif action == "compose_up":
-                cmd = ["docker", "compose", "-f", str(compose_file), "up", "-d", "--remove-orphans"]
+                cmd = [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(compose_file),
+                    "up",
+                    "-d",
+                    "--remove-orphans",
+                ]
             elif action == "compose_restart":
                 cmd = ["docker", "compose", "-f", str(compose_file), "restart"]
             else:
@@ -957,7 +1074,9 @@ class OperationalRouter:
             if container:
                 cmd.append(container)
 
-            code, act_out, act_err = run_bounded_subprocess(cmd, cwd=app_dir, env=env, timeout=300.0)
+            code, act_out, act_err = run_bounded_subprocess(
+                cmd, cwd=app_dir, env=env, timeout=300.0
+            )
             if code != 0:
                 raise RouterExecutionError(
                     f"Action '{action}' failed during workload.update for '{app.name}': {act_err}",
@@ -986,7 +1105,10 @@ class OperationalRouter:
 
     def _op_platform_sync_homepage(self) -> dict[str, Any]:
         self._trigger_homepage_sync()
-        return {"action": "sync_homepage", "message": "Homepage dashboard synchronized successfully"}
+        return {
+            "action": "sync_homepage",
+            "message": "Homepage dashboard synchronized successfully",
+        }
 
     def _trigger_homepage_sync(self) -> None:
         """Atomic compile of Homepage dashboard services.yaml under _homepage_sync.lock."""
@@ -994,4 +1116,5 @@ class OperationalRouter:
             cmd_sync_homepage()
         except (OSError, ValueError, RuntimeError) as exc:
             import sys
+
             print(f"Warning: Homepage sync non-fatal error: {exc}", file=sys.stderr)

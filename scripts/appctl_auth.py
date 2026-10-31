@@ -33,42 +33,52 @@ except ImportError:
     yaml = None  # type: ignore[assignment]
 
 DEFAULT_TOKENS_FILE = Path("/run/secrets/appctl/tokens.json")
-DEFAULT_DEPLOYMENTS_FILE = Path(__file__).resolve().parent.parent / "config" / "deployments.yaml"
+DEFAULT_DEPLOYMENTS_FILE = (
+    Path(__file__).resolve().parent.parent / "config" / "deployments.yaml"
+)
 
-CORE_TARGETS: frozenset[str] = frozenset({
-    "core",
-    "traefik",
-    "authelia",
-    "lldap",
-    "stalwart",
-    "dozzle",
-    "socket-proxy",
-    "homepage",
-    "diun",
-    "watchtower",
-})
+CORE_TARGETS: frozenset[str] = frozenset(
+    {
+        "core",
+        "traefik",
+        "authelia",
+        "lldap",
+        "stalwart",
+        "dozzle",
+        "socket-proxy",
+        "homepage",
+        "diun",
+        "watchtower",
+    }
+)
 
-SENSITIVE_OPERATIONS: frozenset[OperationType] = frozenset({
-    OperationType.WORKLOAD_CONFIG,
-    OperationType.WORKLOAD_LOGS,
-})
+SENSITIVE_OPERATIONS: frozenset[OperationType] = frozenset(
+    {
+        OperationType.WORKLOAD_CONFIG,
+        OperationType.WORKLOAD_LOGS,
+    }
+)
 
-MUTATING_OPERATIONS: frozenset[OperationType] = frozenset({
-    OperationType.WORKLOAD_DEPLOY,
-    OperationType.WORKLOAD_STOP,
-    OperationType.WORKLOAD_RESTART,
-    OperationType.WORKLOAD_UPDATE,
-    OperationType.WORKLOAD_PULL,
-    OperationType.PLATFORM_SYNC_HOMEPAGE,
-})
+MUTATING_OPERATIONS: frozenset[OperationType] = frozenset(
+    {
+        OperationType.WORKLOAD_DEPLOY,
+        OperationType.WORKLOAD_STOP,
+        OperationType.WORKLOAD_RESTART,
+        OperationType.WORKLOAD_UPDATE,
+        OperationType.WORKLOAD_PULL,
+        OperationType.PLATFORM_SYNC_HOMEPAGE,
+    }
+)
 
-READ_ONLY_OPERATIONS: frozenset[OperationType] = frozenset({
-    OperationType.WORKLOAD_LIST,
-    OperationType.WORKLOAD_GET,
-    OperationType.WORKLOAD_RESOLVE,
-    OperationType.PLATFORM_SSL,
-    OperationType.PLATFORM_HEALTH,
-})
+READ_ONLY_OPERATIONS: frozenset[OperationType] = frozenset(
+    {
+        OperationType.WORKLOAD_LIST,
+        OperationType.WORKLOAD_GET,
+        OperationType.WORKLOAD_RESOLVE,
+        OperationType.PLATFORM_SSL,
+        OperationType.PLATFORM_HEALTH,
+    }
+)
 
 
 class Role(StrEnum):
@@ -119,7 +129,11 @@ class TokenDescriptor(StrictModel):
 class AuthenticationError(Exception):
     """Raised when authentication fails (401 Unauthorized)."""
 
-    def __init__(self, message: str = "Authentication required", code: ErrorCode = ErrorCode.ERR_AUTH_REQUIRED) -> None:
+    def __init__(
+        self,
+        message: str = "Authentication required",
+        code: ErrorCode = ErrorCode.ERR_AUTH_REQUIRED,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.http_status = 401
@@ -128,7 +142,11 @@ class AuthenticationError(Exception):
 class AuthorizationError(Exception):
     """Raised when an authenticated principal lacks required role or scope (403 Forbidden)."""
 
-    def __init__(self, message: str = "Permission denied", code: ErrorCode = ErrorCode.ERR_PERMISSION_DENIED) -> None:
+    def __init__(
+        self,
+        message: str = "Permission denied",
+        code: ErrorCode = ErrorCode.ERR_PERMISSION_DENIED,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.http_status = 403
@@ -181,13 +199,15 @@ class TokenStore:
         constant-time hmac.compare_digest.
         """
         if not secret:
-            raise AuthenticationError("Empty Bearer token provided", code=ErrorCode.ERR_AUTH_REQUIRED)
+            raise AuthenticationError(
+                "Empty Bearer token provided", code=ErrorCode.ERR_AUTH_REQUIRED
+            )
 
         secret_hash = hashlib.sha256(secret.encode("utf-8")).hexdigest()
         tokens = self.load_tokens()
 
         for token in tokens:
-            if hmac.compare_digest(secret_hash, token.sha256):
+            if hmac.compare_digest(secret_hash, token.sha256.lower()):
                 return Principal(
                     identity=token.identity,
                     role=token.role,
@@ -195,7 +215,9 @@ class TokenStore:
                     auth_method="bearer_token",
                 )
 
-        raise AuthenticationError("Invalid or unknown Bearer token", code=ErrorCode.ERR_AUTH_REQUIRED)
+        raise AuthenticationError(
+            "Invalid or unknown Bearer token", code=ErrorCode.ERR_AUTH_REQUIRED
+        )
 
 
 def load_admitted_workloads(deployments_path: Path | str | None = None) -> set[str]:
@@ -235,7 +257,13 @@ def load_admitted_workloads(deployments_path: Path | str | None = None) -> set[s
                             if isinstance(alias, str) and alias.strip():
                                 admitted.add(alias.strip())
         return admitted
-    except (OSError, UnicodeDecodeError, ValueError, json.JSONDecodeError, *yaml_errors):
+    except (
+        OSError,
+        UnicodeDecodeError,
+        ValueError,
+        json.JSONDecodeError,
+        *yaml_errors,
+    ):
         return set()
 
 

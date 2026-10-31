@@ -232,6 +232,31 @@ def test_redact_sensitive_data_masks_secret_keys():
     assert redacted["nested"]["list_items"][1] == "safe_string"
 
 
+def test_redact_sensitive_data_masks_bare_keys():
+    """Ensure bare keys (token, secret, password, key, pass, hash) without underscores are redacted (CR-DI-04)."""
+    raw_params = {
+        "token": "tok_12345",
+        "secret": "shh_secret",
+        "password": "mypassword",
+        "key": "encryption_key",
+        "pass": "quick_pass",
+        "hash": "$2b$12$hashval",
+        "TOKEN": "uppercase_tok",
+        "SECRET": "uppercase_sec",
+        "normal_field": "keep_this",
+    }
+    redacted = redact_sensitive_data(raw_params)
+    assert redacted["token"] == "[REDACTED]"
+    assert redacted["secret"] == "[REDACTED]"
+    assert redacted["password"] == "[REDACTED]"
+    assert redacted["key"] == "[REDACTED]"
+    assert redacted["pass"] == "[REDACTED]"
+    assert redacted["hash"] == "[REDACTED]"
+    assert redacted["TOKEN"] == "[REDACTED]"
+    assert redacted["SECRET"] == "[REDACTED]"
+    assert redacted["normal_field"] == "keep_this"
+
+
 def test_audit_logger_automatically_redacts_sensitive_parameters(
     temp_audit_file: Path, sample_principal: PrincipalAudit
 ):

@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 from appctl_audit import AuditLogger, TargetLockManager
 from appctl_auth import Principal, Role
 from appctl_contracts import ErrorCode, OperationRequest
@@ -77,7 +78,9 @@ services:
     container_name: "snappymail"
     restart: "unless-stopped"
 """
-    (app_dir / "docker-compose.yml").write_text(compose_content.strip(), encoding="utf-8")
+    (app_dir / "docker-compose.yml").write_text(
+        compose_content.strip(), encoding="utf-8"
+    )
     return app_dir
 
 
@@ -88,12 +91,16 @@ def admin_principal() -> Principal:
 
 @pytest.fixture
 def operator_principal() -> Principal:
-    return Principal(identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token")
+    return Principal(
+        identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token"
+    )
 
 
 @pytest.fixture
 def viewer_principal() -> Principal:
-    return Principal(identity="unix_uid_1000", role=Role.VIEWER, auth_method="unix_peercred")
+    return Principal(
+        identity="unix_uid_1000", role=Role.VIEWER, auth_method="unix_peercred"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -103,14 +110,17 @@ def viewer_principal() -> Principal:
 
 def test_parse_dotenv_parses_valid_key_values(tmp_path: Path):
     env_file = tmp_path / ".env"
-    env_file.write_text("""
+    env_file.write_text(
+        """
 # Comment line
 APP_PORT=8080
 APP_HOST="127.0.0.1"
 SINGLE_QUOTE='single_val'
 EMPTY_VAL=
 WITH_EQUALS=key=value=more
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     parsed = parse_dotenv(env_file)
     assert parsed["APP_PORT"] == "8080"
@@ -122,11 +132,14 @@ WITH_EQUALS=key=value=more
 
 def test_parse_dotenv_preserves_shell_injection_as_inert_literals(tmp_path: Path):
     env_file = tmp_path / ".env"
-    env_file.write_text("""
+    env_file.write_text(
+        """
 INJECTION_ONE=$(touch /tmp/pwned)
 INJECTION_TWO=`cat /etc/passwd`
 VARIABLE_REF=$HOMELAB_DOMAIN
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     parsed = parse_dotenv(env_file)
     assert parsed["INJECTION_ONE"] == "$(touch /tmp/pwned)"
@@ -187,7 +200,6 @@ def test_resolve_canonical_domain_precedence(monkeypatch: pytest.MonkeyPatch):
     assert resolve_canonical_domain() == "stripped.example.test"
 
 
-
 def test_assemble_workload_env_constructs_6_layer_environment(
     mock_workload_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -195,7 +207,9 @@ def test_assemble_workload_env_constructs_6_layer_environment(
     manifest = parse_manifest(mock_workload_dir / "app.yaml")
 
     # Add local .env
-    (mock_workload_dir / ".env").write_text("LOCAL_ENV_VAR=local_val\n", encoding="utf-8")
+    (mock_workload_dir / ".env").write_text(
+        "LOCAL_ENV_VAR=local_val\n", encoding="utf-8"
+    )
 
     env = assemble_workload_env(mock_workload_dir, manifest, "snappymail")
 
@@ -292,7 +306,9 @@ services:
 # ---------------------------------------------------------------------------
 
 
-def test_operational_router_dispatches_platform_health(tmp_path: Path, admin_principal: Principal):
+def test_operational_router_dispatches_platform_health(
+    tmp_path: Path, admin_principal: Principal
+):
     router = OperationalRouter(
         audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
         lock_manager=TargetLockManager(tmp_path / "locks"),
@@ -325,10 +341,12 @@ def test_operational_router_enforces_rbac_denial(
         audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
         lock_manager=TargetLockManager(tmp_path / "locks"),
     )
-    req = OperationRequest.model_validate({
-        "operation": "workload.deploy",
-        "target": "snappymail",
-    })
+    req = OperationRequest.model_validate(
+        {
+            "operation": "workload.deploy",
+            "target": "snappymail",
+        }
+    )
     resp = router.dispatch(req, viewer_principal)
     assert resp.success is False
     assert resp.error is not None
@@ -342,10 +360,12 @@ def test_operational_router_rejects_non_existent_target(
         audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
         lock_manager=TargetLockManager(tmp_path / "locks"),
     )
-    req = OperationRequest.model_validate({
-        "operation": "workload.get",
-        "target": "nonexistent_workload_999",
-    })
+    req = OperationRequest.model_validate(
+        {
+            "operation": "workload.get",
+            "target": "nonexistent_workload_999",
+        }
+    )
     resp = router.dispatch(req, admin_principal)
     assert resp.success is False
     assert resp.error is not None
@@ -360,10 +380,12 @@ def test_operational_router_rejects_concurrent_mutation(
         audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
         lock_manager=lock_mgr,
     )
-    req = OperationRequest.model_validate({
-        "operation": "workload.deploy",
-        "target": "snappymail",
-    })
+    req = OperationRequest.model_validate(
+        {
+            "operation": "workload.deploy",
+            "target": "snappymail",
+        }
+    )
 
     mock_app = MagicMock()
     mock_app.name = "snappymail"
@@ -388,11 +410,13 @@ def test_operational_router_dispatches_workload_deploy(
         lock_manager=TargetLockManager(tmp_path / "locks"),
         sites_dir=mock_workload_dir.parent,
     )
-    req = OperationRequest.model_validate({
-        "operation": "workload.deploy",
-        "target": "snappymail",
-        "parameters": {"recreate": True, "remove_orphans": True, "build": False},
-    })
+    req = OperationRequest.model_validate(
+        {
+            "operation": "workload.deploy",
+            "target": "snappymail",
+            "parameters": {"recreate": True, "remove_orphans": True, "build": False},
+        }
+    )
 
     mock_app = MagicMock()
     mock_app.name = "snappymail"
@@ -400,7 +424,10 @@ def test_operational_router_dispatches_workload_deploy(
 
     with (
         patch("appctl_router.resolve_app", return_value=mock_app),
-        patch("appctl_router.run_bounded_subprocess", return_value=(0, "Container started", "")) as mock_run,
+        patch(
+            "appctl_router.run_bounded_subprocess",
+            return_value=(0, "Container started", ""),
+        ) as mock_run,
         patch("appctl_router.cmd_sync_homepage"),
     ):
         resp = router.dispatch(req, admin_principal)
@@ -424,11 +451,13 @@ def test_operational_router_workload_deploy_build_flags(
     mock_app.dir_path = str(mock_workload_dir)
 
     # 1. Deploy with build=True passes --pull
-    req_build = OperationRequest.model_validate({
-        "operation": "workload.deploy",
-        "target": "snappymail",
-        "parameters": {"build": True},
-    })
+    req_build = OperationRequest.model_validate(
+        {
+            "operation": "workload.deploy",
+            "target": "snappymail",
+            "parameters": {"build": True},
+        }
+    )
     executed_commands: list[list[str]] = []
 
     def mock_subproc(cmd: list[str], **kwargs):
@@ -445,15 +474,22 @@ def test_operational_router_workload_deploy_build_flags(
         build_calls = [c for c in executed_commands if "build" in c]
         assert len(build_calls) == 1
         assert build_calls[0] == [
-            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull"
+            "docker",
+            "compose",
+            "-f",
+            str(mock_workload_dir / "docker-compose.yml"),
+            "build",
+            "--pull",
         ]
 
     # 2. Deploy with no_cache=True passes --pull and --no-cache
-    req_no_cache = OperationRequest.model_validate({
-        "operation": "workload.deploy",
-        "target": "snappymail",
-        "parameters": {"no_cache": True},
-    })
+    req_no_cache = OperationRequest.model_validate(
+        {
+            "operation": "workload.deploy",
+            "target": "snappymail",
+            "parameters": {"no_cache": True},
+        }
+    )
     executed_commands.clear()
 
     with (
@@ -466,7 +502,13 @@ def test_operational_router_workload_deploy_build_flags(
         build_calls = [c for c in executed_commands if "build" in c]
         assert len(build_calls) == 1
         assert build_calls[0] == [
-            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull", "--no-cache"
+            "docker",
+            "compose",
+            "-f",
+            str(mock_workload_dir / "docker-compose.yml"),
+            "build",
+            "--pull",
+            "--no-cache",
         ]
 
 
@@ -478,10 +520,12 @@ def test_operational_router_workload_update_rejects_dirty_git_tree(
         lock_manager=TargetLockManager(tmp_path / "locks"),
         sites_dir=mock_workload_dir.parent,
     )
-    req = OperationRequest.model_validate({
-        "operation": "workload.update",
-        "target": "snappymail",
-    })
+    req = OperationRequest.model_validate(
+        {
+            "operation": "workload.update",
+            "target": "snappymail",
+        }
+    )
 
     mock_app = MagicMock()
     mock_app.name = "snappymail"
@@ -512,11 +556,13 @@ def test_operational_router_workload_update_rejects_branch_mismatch(
         lock_manager=TargetLockManager(tmp_path / "locks"),
         sites_dir=mock_workload_dir.parent,
     )
-    req = OperationRequest.model_validate({
-        "operation": "workload.update",
-        "target": "snappymail",
-        "parameters": {"expected_branch": "feature/branch"},
-    })
+    req = OperationRequest.model_validate(
+        {
+            "operation": "workload.update",
+            "target": "snappymail",
+            "parameters": {"expected_branch": "feature/branch"},
+        }
+    )
 
     mock_app = MagicMock()
     mock_app.name = "snappymail"
@@ -550,11 +596,13 @@ def test_operational_router_workload_update_succeeds_on_clean_tree(
         lock_manager=TargetLockManager(tmp_path / "locks"),
         sites_dir=mock_workload_dir.parent,
     )
-    req = OperationRequest.model_validate({
-        "operation": "workload.update",
-        "target": "snappymail",
-        "parameters": {"expected_branch": "main"},
-    })
+    req = OperationRequest.model_validate(
+        {
+            "operation": "workload.update",
+            "target": "snappymail",
+            "parameters": {"expected_branch": "main"},
+        }
+    )
 
     mock_app = MagicMock()
     mock_app.name = "snappymail"
@@ -611,11 +659,13 @@ def test_operational_router_workload_update_build_and_no_cache_flags(
         return 0, "success", ""
 
     # 1. Update with build=True
-    req_build = OperationRequest.model_validate({
-        "operation": "workload.update",
-        "target": "snappymail",
-        "parameters": {"build": True},
-    })
+    req_build = OperationRequest.model_validate(
+        {
+            "operation": "workload.update",
+            "target": "snappymail",
+            "parameters": {"build": True},
+        }
+    )
 
     with (
         patch("appctl_router.resolve_app", return_value=mock_app),
@@ -627,18 +677,25 @@ def test_operational_router_workload_update_build_and_no_cache_flags(
         build_calls = [c for c in executed_commands if "build" in c]
         assert len(build_calls) == 1
         assert build_calls[0] == [
-            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull"
+            "docker",
+            "compose",
+            "-f",
+            str(mock_workload_dir / "docker-compose.yml"),
+            "build",
+            "--pull",
         ]
         # Also ensure compose_up was executed
         up_calls = [c for c in executed_commands if "up" in c]
         assert len(up_calls) == 1
 
     # 2. Update with no_cache=True implies build=True and appends --no-cache
-    req_no_cache = OperationRequest.model_validate({
-        "operation": "workload.update",
-        "target": "snappymail",
-        "parameters": {"no_cache": True},
-    })
+    req_no_cache = OperationRequest.model_validate(
+        {
+            "operation": "workload.update",
+            "target": "snappymail",
+            "parameters": {"no_cache": True},
+        }
+    )
     executed_commands.clear()
 
     with (
@@ -651,7 +708,13 @@ def test_operational_router_workload_update_build_and_no_cache_flags(
         build_calls = [c for c in executed_commands if "build" in c]
         assert len(build_calls) == 1
         assert build_calls[0] == [
-            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull", "--no-cache"
+            "docker",
+            "compose",
+            "-f",
+            str(mock_workload_dir / "docker-compose.yml"),
+            "build",
+            "--pull",
+            "--no-cache",
         ]
         up_calls = [c for c in executed_commands if "up" in c]
         assert len(up_calls) == 1
@@ -675,7 +738,9 @@ deployment:
     - "compose_build"
     - "compose_up"
 """
-    (mock_workload_dir / "app.yaml").write_text(manifest_content.strip(), encoding="utf-8")
+    (mock_workload_dir / "app.yaml").write_text(
+        manifest_content.strip(), encoding="utf-8"
+    )
 
     router = OperationalRouter(
         audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
@@ -699,10 +764,12 @@ deployment:
         return 0, "success", ""
 
     # Update with declared compose_build invokes build --pull
-    req = OperationRequest.model_validate({
-        "operation": "workload.update",
-        "target": "snappymail",
-    })
+    req = OperationRequest.model_validate(
+        {
+            "operation": "workload.update",
+            "target": "snappymail",
+        }
+    )
 
     with (
         patch("appctl_router.resolve_app", return_value=mock_app),
@@ -714,7 +781,12 @@ deployment:
         build_calls = [c for c in executed_commands if "build" in c]
         assert len(build_calls) == 1
         assert build_calls[0] == [
-            "docker", "compose", "-f", str(mock_workload_dir / "docker-compose.yml"), "build", "--pull"
+            "docker",
+            "compose",
+            "-f",
+            str(mock_workload_dir / "docker-compose.yml"),
+            "build",
+            "--pull",
         ]
 
 
@@ -738,7 +810,9 @@ services:
     image: "authelia/authelia:latest"
     container_name: "authelia"
 """
-    (mock_core_dir / "docker-compose.yml").write_text(compose_content.strip(), encoding="utf-8")
+    (mock_core_dir / "docker-compose.yml").write_text(
+        compose_content.strip(), encoding="utf-8"
+    )
 
     router = OperationalRouter(
         audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
@@ -759,7 +833,9 @@ services:
     ):
         # 1. Deploy core stack
         resp_deploy = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.deploy", "target": "core"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.deploy", "target": "core"}
+            ),
             admin_principal,
         )
         assert resp_deploy.success is True
@@ -775,7 +851,9 @@ services:
 
         # 2. Stop core stack (uses `down` for full stack)
         resp_stop = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.stop", "target": "core"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.stop", "target": "core"}
+            ),
             admin_principal,
         )
         assert resp_stop.success is True
@@ -789,7 +867,9 @@ services:
 
         # 3. Restart core stack
         resp_restart = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.restart", "target": "core"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.restart", "target": "core"}
+            ),
             admin_principal,
         )
         assert resp_restart.success is True
@@ -803,7 +883,9 @@ services:
 
         # 4. Config core stack
         resp_config = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.config", "target": "core"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.config", "target": "core"}
+            ),
             admin_principal,
         )
         assert resp_config.success is True
@@ -845,7 +927,9 @@ def test_operational_router_dispatches_core_service_container_scoped_operations(
     with patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc):
         # 1. Deploy single core service (traefik)
         resp_deploy = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.deploy", "target": "traefik"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.deploy", "target": "traefik"}
+            ),
             admin_principal,
         )
         assert resp_deploy.success is True
@@ -854,7 +938,9 @@ def test_operational_router_dispatches_core_service_container_scoped_operations(
 
         # 2. Stop single core service (uses `stop traefik`, NOT `down`)
         resp_stop = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.stop", "target": "traefik"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.stop", "target": "traefik"}
+            ),
             admin_principal,
         )
         assert resp_stop.success is True
@@ -869,7 +955,9 @@ def test_operational_router_dispatches_core_service_container_scoped_operations(
 
         # 3. Restart single core service
         resp_restart = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.restart", "target": "traefik"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.restart", "target": "traefik"}
+            ),
             admin_principal,
         )
         assert resp_restart.success is True
@@ -884,7 +972,9 @@ def test_operational_router_dispatches_core_service_container_scoped_operations(
 
         # 4. Pull single core service
         resp_pull = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.pull", "target": "traefik"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.pull", "target": "traefik"}
+            ),
             admin_principal,
         )
         assert resp_pull.success is True
@@ -909,7 +999,9 @@ def test_operational_router_dispatches_core_service_container_scoped_operations(
 
         # 5. Logs single core service
         resp_logs = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.logs", "target": "traefik"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.logs", "target": "traefik"}
+            ),
             admin_principal,
         )
         assert resp_logs.success is True
@@ -945,7 +1037,9 @@ def test_operational_router_dispatches_core_update_without_manifest(
 
     with patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc):
         resp = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.update", "target": "core"}),
+            OperationRequest.model_validate(
+                {"operation": "workload.update", "target": "core"}
+            ),
             admin_principal,
         )
         assert resp.success is True
@@ -968,7 +1062,9 @@ def test_operational_router_rejects_operator_role_on_core_targets(
     )
     for target in ("core", "traefik", "authelia"):
         resp = router.dispatch(
-            OperationRequest.model_validate({"operation": "workload.restart", "target": target}),
+            OperationRequest.model_validate(
+                {"operation": "workload.restart", "target": target}
+            ),
             operator_principal,
         )
         assert resp.success is False
@@ -991,10 +1087,12 @@ def test_operational_router_workload_list_honors_filter_params(
 
     # Without --core: only Sites workloads (1)
     resp_sites = router.dispatch(
-        OperationRequest.model_validate({
-            "operation": "workload.list",
-            "parameters": {"core": False, "fetch": False, "ssl": False},
-        }),
+        OperationRequest.model_validate(
+            {
+                "operation": "workload.list",
+                "parameters": {"core": False, "fetch": False, "ssl": False},
+            }
+        ),
         viewer_principal,
     )
     assert resp_sites.success is True
@@ -1003,12 +1101,17 @@ def test_operational_router_workload_list_honors_filter_params(
     assert resp_sites.result["workloads"][0]["name"] == "snappymail"
 
     # With --core and --ssl: includes Core services and SSL inspection
-    with patch("appctl_router.check_ssl_cert", return_value={"status": "🟢 80d remaining", "domain": "example.test"}) as mock_ssl:
+    with patch(
+        "appctl_router.check_ssl_cert",
+        return_value={"status": "🟢 80d remaining", "domain": "example.test"},
+    ) as mock_ssl:
         resp_core = router.dispatch(
-            OperationRequest.model_validate({
-                "operation": "workload.list",
-                "parameters": {"core": True, "fetch": False, "ssl": True},
-            }),
+            OperationRequest.model_validate(
+                {
+                    "operation": "workload.list",
+                    "parameters": {"core": True, "fetch": False, "ssl": True},
+                }
+            ),
             viewer_principal,
         )
         assert resp_core.success is True
@@ -1034,13 +1137,17 @@ def test_operational_router_workload_list_includes_live_docker_and_two_axis_stat
         core_dir=mock_core_dir,
     )
 
-    with patch("appctl_router.get_docker_status", return_value="🟢 Running (1)") as mock_docker:
+    with patch(
+        "appctl_router.get_docker_status", return_value="🟢 Running (1)"
+    ) as mock_docker:
         # 1. Sites workload offline (fetch=False)
         resp = router.dispatch(
-            OperationRequest.model_validate({
-                "operation": "workload.list",
-                "parameters": {"core": False, "fetch": False, "ssl": False},
-            }),
+            OperationRequest.model_validate(
+                {
+                    "operation": "workload.list",
+                    "parameters": {"core": False, "fetch": False, "ssl": False},
+                }
+            ),
             viewer_principal,
         )
         assert resp.success is True
@@ -1055,10 +1162,12 @@ def test_operational_router_workload_list_includes_live_docker_and_two_axis_stat
 
         # 2. Core services included (core=True)
         resp_core = router.dispatch(
-            OperationRequest.model_validate({
-                "operation": "workload.list",
-                "parameters": {"core": True, "fetch": False, "ssl": False},
-            }),
+            OperationRequest.model_validate(
+                {
+                    "operation": "workload.list",
+                    "parameters": {"core": True, "fetch": False, "ssl": False},
+                }
+            ),
             viewer_principal,
         )
         assert resp_core.success is True
@@ -1095,10 +1204,12 @@ def test_operational_router_workload_list_fetch_passes_fetch_upstream(
         mock_inspect.return_value = mock_two_axis
 
         resp_fetch = router.dispatch(
-            OperationRequest.model_validate({
-                "operation": "workload.list",
-                "parameters": {"core": False, "fetch": True, "ssl": False},
-            }),
+            OperationRequest.model_validate(
+                {
+                    "operation": "workload.list",
+                    "parameters": {"core": False, "fetch": True, "ssl": False},
+                }
+            ),
             viewer_principal,
         )
         assert resp_fetch.success is True
@@ -1120,7 +1231,9 @@ def test_operational_router_workload_list_handles_manifest_error(
     """Ensure workload.list sets deployment_status and provenance_status correctly for apps with manifest errors."""
     broken_app_dir = mock_sites_dir / "broken-app"
     broken_app_dir.mkdir(parents=True, exist_ok=True)
-    (broken_app_dir / "app.yaml").write_text("invalid_yaml: [unclosed list", encoding="utf-8")
+    (broken_app_dir / "app.yaml").write_text(
+        "invalid_yaml: [unclosed list", encoding="utf-8"
+    )
 
     router = OperationalRouter(
         audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
@@ -1131,10 +1244,12 @@ def test_operational_router_workload_list_handles_manifest_error(
 
     with patch("appctl_router.get_docker_status", return_value="🔴 Stopped"):
         resp = router.dispatch(
-            OperationRequest.model_validate({
-                "operation": "workload.list",
-                "parameters": {"core": False, "fetch": False, "ssl": False},
-            }),
+            OperationRequest.model_validate(
+                {
+                    "operation": "workload.list",
+                    "parameters": {"core": False, "fetch": False, "ssl": False},
+                }
+            ),
             viewer_principal,
         )
         assert resp.success is True
@@ -1147,5 +1262,92 @@ def test_operational_router_workload_list_handles_manifest_error(
         assert broken["provenance_status"] == "⚠️ Invalid Manifest"
 
 
+def test_operational_router_workload_config_redacts_evaluated_secrets_for_operator(
+    tmp_path: Path,
+    mock_sites_dir: Path,
+    mock_core_dir: Path,
+):
+    """Ensure workload.config redacts evaluated secrets in YAML output for non-admin operators (CR-DI-03)."""
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_sites_dir,
+        core_dir=mock_core_dir,
+    )
+    workload_dir = mock_sites_dir / "docs"
+    workload_dir.mkdir(parents=True, exist_ok=True)
+    (workload_dir / "docker-compose.yml").write_text(
+        "services:\n  docs:\n    image: docs:latest\n"
+    )
+    (workload_dir / "app.yaml").write_text("name: docs\n")
+
+    operator_principal = Principal(
+        identity="alice", role=Role.OPERATOR, auth_method="bearer_token"
+    )
+    admin_principal = Principal(
+        identity="admin", role=Role.ADMIN, auth_method="bearer_token"
+    )
+
+    raw_yaml_stdout = """services:
+  docs:
+    environment:
+      DB_PASSWORD: supersecretpassword123
+      API_TOKEN: tok_secretabc
+      PUBLIC_SETTING: allowed_value
+    image: docs:latest
+"""
+
+    mock_app = MagicMock(name="docs")
+    mock_app.name = "docs"
+    mock_app.dir_path = workload_dir
+    mock_app.is_core = False
+
+    req = OperationRequest.model_validate(
+        {"operation": "workload.config", "target": "docs"}
+    )
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.load_admitted_workloads", return_value={"docs"}),
+        patch(
+            "appctl_router.run_bounded_subprocess",
+            return_value=(0, raw_yaml_stdout, ""),
+        ),
+    ):
+        # 1. Non-admin operator receives redacted output
+        resp_op = router.dispatch(req, operator_principal)
+        assert resp_op.success is True
+        assert resp_op.result is not None
+        output_yaml = resp_op.result["output"]
+        assert "supersecretpassword123" not in output_yaml
+        assert "tok_secretabc" not in output_yaml
+        assert "allowed_value" in output_yaml
+        parsed_op = yaml.safe_load(output_yaml)
+        env = parsed_op["services"]["docs"]["environment"]
+        assert env["DB_PASSWORD"] == "[REDACTED]"
+        assert env["API_TOKEN"] == "[REDACTED]"
+        assert env["PUBLIC_SETTING"] == "allowed_value"
+
+        # 2. Admin receives plaintext unredacted output
+        resp_admin = router.dispatch(req, admin_principal)
+        assert resp_admin.success is True
+        assert resp_admin.result is not None
+        assert "supersecretpassword123" in resp_admin.result["output"]
 
 
+def test_parse_dotenv_rejects_reserved_platform_keys(tmp_path: Path):
+    """Ensure parse_dotenv rejects platform routing and docker config variables in .env (CR-DI-07)."""
+    env_file = tmp_path / ".env"
+    for reserved_key in [
+        "HOMELAB_DOMAIN",
+        "DOMAIN_SUFFIX",
+        "DOMAIN",
+        "PROXY_NETWORK",
+        "CERT_RESOLVER",
+        "DOCKER_CONFIG",
+    ]:
+        env_file.write_text(f"{reserved_key}=override_val\n", encoding="utf-8")
+        with pytest.raises(
+            RouterValidationError, match="Prohibited reserved environment key"
+        ):
+            parse_dotenv(env_file, validate_keys=True)
