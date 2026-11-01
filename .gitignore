@@ -41,6 +41,7 @@ config/homepage/custom.js
 Thumbs.db
 .vscode/
 .idea/
+.worktrees/
 
 # Python & Testing Caches
 __pycache__/
