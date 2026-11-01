@@ -103,8 +103,8 @@
   # Declarative Dynamic GitOps Webhook Service (Internal Port 9000)
   systemd.services.homelab-gitops = {
     description = "Dynamic Homelab GitOps Webhook Dispatcher";
-    after = [ "network-online.target" "docker.service" ];
-    wants = [ "network-online.target" ];
+    after = [ "network-online.target" "docker.service" "homelab-appctl.service" ];
+    wants = [ "network-online.target" "homelab-appctl.service" ];
     wantedBy = [ "multi-user.target" ];
 
     path = with pkgs; [
@@ -154,7 +154,7 @@
       ReadWritePaths = [
         config.homelab.sitesDir
         "/home/${config.homelab.operatorUser}/.local/state/homelab"
-        "/run/homelab"
+        "-/run/homelab"
       ];
     };
   };
@@ -226,11 +226,11 @@
       ProtectControlGroups = true;
       ReadWritePaths = [
         config.homelab.sitesDir
-        "/home/${config.homelab.operatorUser}/var/lib/homelab"
-        "${config.homelab.coreDir}/config/homepage"
+        "-/home/${config.homelab.operatorUser}/var/lib/homelab"
+        "-${config.homelab.coreDir}/config/homepage"
         "/var/log/homelab/appctl"
-        "/var/lib/homelab/appctl"
-        "/run/homelab"
+        "-/var/lib/homelab/appctl"
+        "-/run/homelab"
       ];
     };
   };
@@ -242,6 +242,7 @@
     "d ${config.homelab.sitesDir} 0755 ${config.homelab.operatorUser} users -"
     "d /home/${config.homelab.operatorUser}/.local/state/homelab/gitops 0755 ${config.homelab.operatorUser} users -"
     "d /home/${config.homelab.operatorUser}/.local/state/homelab/docker 0755 ${config.homelab.operatorUser} users -"
+    "d /home/${config.homelab.operatorUser}/var/lib/homelab 0755 ${config.homelab.operatorUser} users -"
     # POSIX ACLs granting homelab-appctl traverse and access to operator sites & homepage config
     "a+ /home/${config.homelab.operatorUser} - - - - u:homelab-appctl:x"
     "a+ ${config.homelab.coreDir} - - - - u:homelab-appctl:x"

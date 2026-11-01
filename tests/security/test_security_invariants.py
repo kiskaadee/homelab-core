@@ -2,6 +2,7 @@
 Security invariant tests for Docker Compose and container isolation.
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -289,6 +290,61 @@ def test_nixos_tmpfiles_rules_use_recursive_acls():
     assert '"A+ ${config.homelab.coreDir}/config/homepage' in content, (
         "tmpfiles.rules must use uppercase 'A+' for recursive ACL inheritance on homepage config"
     )
+
+
+def test_nixos_tmpfiles_rules_creates_operator_var_lib_homelab():
+    """Ensure tmpfiles.rules creates operator var/lib/homelab state dir before ACL assignment (#22)."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    expected_create = '"d /home/${config.homelab.operatorUser}/var/lib/homelab 0755 ${config.homelab.operatorUser} users -"'
+    expected_acl = '"A+ /home/${config.homelab.operatorUser}/var/lib/homelab - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"'
+
+    assert expected_create in content, (
+        "tmpfiles.rules must declare creation of operator var/lib/homelab directory"
+    )
+    assert expected_acl in content, (
+        "tmpfiles.rules must declare ACLs for operator var/lib/homelab directory"
+    )
+    assert content.index(expected_create) < content.index(expected_acl), (
+        "operator var/lib/homelab directory creation must precede its ACL rule"
+    )
+
+
+def test_nixos_appctl_readwritepaths_optional_prefixes():
+    """Ensure appctl service ReadWritePaths uses '-' prefix for optional runtime paths (#22)."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    assert '"-/home/${config.homelab.operatorUser}/var/lib/homelab"' in content
+    assert '"-${config.homelab.coreDir}/config/homepage"' in content
+    assert '"-/var/lib/homelab/appctl"' in content
+    assert '"-/run/homelab"' in content
+
+
+def test_nixos_gitops_orders_after_appctl():
+    """Ensure homelab-gitops service declares after and wants dependency on homelab-appctl.service (#22)."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    assert '"homelab-appctl.service"' in content
+
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        for attr in ["after", "wants"]:
+            cmd = [
+                nix_bin,
+                "eval",
+                f".#nixosConfigurations.server.config.systemd.services.homelab-gitops.{attr}",
+                "--json",
+            ]
+            res = subprocess.run(
+                cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+            )
+            data = json.loads(res.stdout)
+            assert "homelab-appctl.service" in data, (
+                f"homelab-gitops {attr} must include homelab-appctl.service"
+            )
 
 
 def test_default_homelab_domain_evaluates_to_example_test():
