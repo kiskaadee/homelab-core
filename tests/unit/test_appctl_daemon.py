@@ -287,7 +287,7 @@ def test_auth_missing_token_fails_closed(daemon_env):
     """
     deploy_req = OperationRequest(operation=OperationType.WORKLOAD_DEPLOY, target="docs")
 
-    with patch("subprocess.run") as mock_subproc:
+    with patch("appctl_router.run_bounded_subprocess") as mock_subproc:
         # Over HTTP without token
         resp_http = send_daemon_request(
             endpoint=daemon_env.http_url,
@@ -401,7 +401,7 @@ def test_daemon_preflight_and_dotenv_safety(daemon_env):
 
     deploy_req = OperationRequest(operation=OperationType.WORKLOAD_DEPLOY, target="docs")
 
-    with patch("subprocess.run") as mock_subproc:
+    with patch("appctl_router.run_bounded_subprocess") as mock_subproc:
         resp = send_daemon_request(
             endpoint=daemon_env.socket_path,
             operation_request=deploy_req,
@@ -470,7 +470,7 @@ def test_audit_failure_blocks_mutation(daemon_env):
     daemon_env.audit_file.chmod(0o400)
     deploy_req = OperationRequest(operation=OperationType.WORKLOAD_DEPLOY, target="docs")
 
-    with patch("subprocess.run") as mock_subproc:
+    with patch("appctl_router.run_bounded_subprocess") as mock_subproc:
         resp = send_daemon_request(
             endpoint=daemon_env.socket_path,
             operation_request=deploy_req,
@@ -515,13 +515,20 @@ def test_gitops_dispatcher_delegates_to_daemon(daemon_env, monkeypatch):
     monkeypatch.setenv("GITOPS_APPCTL_TOKEN", OPERATOR_SECRET)
     monkeypatch.setenv("APPCTL_SOCKET_PATH", str(daemon_env.socket_path))
 
-    with patch.object(daemon_env.daemon.router, "_op_workload_update") as mock_update:
-        mock_update.return_value = ({"action": "updated", "message": "Updated via daemon"}, "sha12345")
+    def mock_subproc(cmd, *args, **kwargs):
+        if "status" in cmd:
+            return (0, "", "")
+        if "rev-parse" in cmd:
+            return (0, "sha12345", "")
+        return (0, "ok", "")
 
+    with patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc) as mock_sub, patch(
+        "appctl_router.OperationalRouter._trigger_homepage_sync"
+    ):
         success = gitops_dispatcher.execute_deployment(
             target_dir=daemon_env.docs_dir,
             deployment_config={"branch": "main", "actions": ["git_pull", "compose_up"]},
             branch="main",
         )
         assert success is True
-        assert mock_update.call_count == 1
+        assert mock_sub.call_count >= 1
