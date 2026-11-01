@@ -22,6 +22,7 @@ import concurrent.futures
 import hashlib
 import json
 import socket
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -29,7 +30,7 @@ from unittest.mock import patch
 
 import gitops_dispatcher
 import pytest
-from appctl_audit import AuditLogger, TargetLockManager
+from appctl_audit import AuditLogger, AuditPersistenceError, TargetLockManager
 from appctl_auth import Role, TokenDescriptor, TokenStore
 from appctl_contracts import ErrorCode, OperationRequest, OperationType
 from appctl_daemon import (
@@ -64,7 +65,8 @@ def daemon_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     - Valid 0600 audit log file
     """
     monkeypatch.setenv("HOMELAB_DOMAIN", "example.test")
-    socket_path = tmp_path / "appctl.sock"
+    sock_dir = tempfile.TemporaryDirectory(prefix="appctl_sock_", dir="/tmp")
+    socket_path = Path(sock_dir.name) / "appctl.sock"
     http_port = get_free_port()
     http_host = "127.0.0.1"
 
@@ -191,6 +193,7 @@ def daemon_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         yield ctx
     finally:
         daemon.stop()
+        sock_dir.cleanup()
 
 
 def test_health_endpoint(daemon_env):
@@ -519,10 +522,16 @@ def test_audit_failure_blocks_mutation(daemon_env):
     Unwritable audit.jsonl aborts mutating command with 500 ERR_EXECUTION_FAILED
     and zero Docker invocations.
     """
-    daemon_env.audit_file.chmod(0o400)
     deploy_req = OperationRequest(operation=OperationType.WORKLOAD_DEPLOY, target="docs")
 
-    with patch("appctl_router.run_bounded_subprocess") as mock_subproc:
+    with (
+        patch.object(
+            daemon_env.daemon.audit_logger,
+            "emit_event",
+            side_effect=AuditPersistenceError("Simulated disk full or permission error"),
+        ),
+        patch("appctl_router.run_bounded_subprocess") as mock_subproc,
+    ):
         resp = send_daemon_request(
             endpoint=daemon_env.socket_path,
             operation_request=deploy_req,
@@ -533,9 +542,6 @@ def test_audit_failure_blocks_mutation(daemon_env):
         assert resp.error.code == ErrorCode.ERR_EXECUTION_FAILED
         assert resp.error.code.http_status == 500
         assert mock_subproc.call_count == 0
-
-    # Restore write permission for teardown
-    daemon_env.audit_file.chmod(0o600)
 
 
 def test_daemon_restart_preserves_state(daemon_env):

@@ -473,9 +473,11 @@ def test_appctl_wrapper_fast_paths_completion_when_socket_exists(tmp_path: Path,
     import socket as std_socket
     import subprocess
     import sys
+    import tempfile
 
     bash_bin = shutil.which("bash") or "bash"
-    sock_path = tmp_path / "appctl.sock"
+    sock_dir = tempfile.TemporaryDirectory(prefix="appctl_sock_", dir="/tmp")
+    sock_path = Path(sock_dir.name) / "appctl.sock"
     srv = std_socket.socket(std_socket.AF_UNIX, std_socket.SOCK_STREAM)
     srv.bind(str(sock_path))
     try:
@@ -512,6 +514,7 @@ def test_appctl_wrapper_fast_paths_completion_when_socket_exists(tmp_path: Path,
         assert "core" in res_words.stdout
     finally:
         srv.close()
+        sock_dir.cleanup()
 
 
 def test_appctl_wrapper_fails_closed_when_socket_is_missing(tmp_path: Path):

@@ -8,7 +8,6 @@ test_<subject>_<accepts|rejects|enforces>_<condition>
 from __future__ import annotations
 
 import json
-import os
 import stat
 from pathlib import Path
 
@@ -285,32 +284,24 @@ def test_audit_logger_automatically_redacts_sensitive_parameters(
 def test_audit_logger_fails_closed_when_audit_log_unwritable(
     tmp_path: Path, sample_principal: PrincipalAudit
 ):
-    read_only_dir = tmp_path / "readonly_audit"
-    read_only_dir.mkdir(parents=True, exist_ok=True)
-    unwritable_file = read_only_dir / "audit.jsonl"
-    unwritable_file.touch(mode=0o400)
-    os.chmod(unwritable_file, 0o400)
+    # Using a directory as the audit path causes os.open with O_WRONLY to fail with
+    # EISDIR / OSError across all platforms and environments (including root containers).
+    unwritable_target = tmp_path / "unwritable_audit_dir"
+    unwritable_target.mkdir(parents=True, exist_ok=True)
 
-    # In addition, make directory read-only
-    os.chmod(read_only_dir, 0o500)
-
-    try:
-        logger = AuditLogger(unwritable_file)
-        with pytest.raises(AuditPersistenceError) as exc_info:
-            logger.log_dispatched(
-                operation_id="op_105",
-                principal=sample_principal,
-                action="workload.deploy",
-                target="jellyfin",
-                transport="unix_socket",
-                origin="peer_uid_1000",
-                client="appctl-cli/2.0",
-                parameters={"recreate": True},
-            )
-        assert "Failed to persist audit event" in str(exc_info.value)
-    finally:
-        os.chmod(read_only_dir, 0o700)
-        os.chmod(unwritable_file, 0o600)
+    logger = AuditLogger(unwritable_target)
+    with pytest.raises(AuditPersistenceError) as exc_info:
+        logger.log_dispatched(
+            operation_id="op_105",
+            principal=sample_principal,
+            action="workload.deploy",
+            target="jellyfin",
+            transport="unix_socket",
+            origin="peer_uid_1000",
+            client="appctl-cli/2.0",
+            parameters={"recreate": True},
+        )
+    assert "Failed to persist audit event" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
