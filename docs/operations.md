@@ -16,8 +16,14 @@ After modifying any file in `nixos/` (including `configuration.nix`, `hardware-c
 nix-switch
 
 # Or using the explicit command:
-sudo nixos-rebuild switch --flake ~/Core#server
+sudo nixos-rebuild switch --flake path:/home/operator/Core#server --impure
 ```
+
+> [!NOTE]
+> **Flake Fetcher Scheme for Untracked Files**:
+> When importing the gitignored `nixos/instance.nix`, Nix's default Git fetcher filters it out unless the `path:` scheme is used (`path:/home/operator/Core#server` or `path:~/Core#server`). The `path:` scheme instructs Nix to evaluate directly from the filesystem without filtering by the Git index.
+> If using `/etc/nixos/homelab-instance.nix`, a standard `--flake ~/Core#server --impure` works directly since `/etc/nixos` is outside the repository.
+
 
 ### Dry Build Validation & Rollback
 ```bash
@@ -139,9 +145,8 @@ appctl restart docs
 appctl restart traefik
 appctl restart authelia
 
-# Sequential stack update (clean working tree check -> git pull -> compose pull -> up -> sync)
+# Sequential stack update for independent Sites workloads (clean tree check -> git pull -> compose pull -> up -> sync)
 appctl update docs
-appctl update core
 
 # Stream live container logs
 appctl logs docs
@@ -150,6 +155,37 @@ appctl logs -f stalwart
 # View resolved Docker Compose configuration
 appctl config docs
 ```
+
+### Workload vs. Core Update Policy
+
+Homelab enforces a strict architectural boundary between independent application workloads (`~/Sites/<app>`) and Homelab Core (`~/Core`):
+
+#### 1. Independent Sites Workloads (`~/Sites/<app>`)
+- **Automated Lifecycle**: Workloads declare their lifecycle via `app.yaml` manifests and Compose definitions.
+- **Update Command**: `appctl update <workload>` performs pre-flight verification, branch matching, `git pull --ff-only`, container image pull, stack reload, and dashboard synchronization.
+- **GitOps Webhook Dispatch**: Workloads registered in `config/deployments.yaml` can be triggered automatically via authenticated GitOps webhooks on Gitea push events.
+- **Daemon Permissions**: `homelab-appctl.service` holds read-write permissions over `~/Sites` to manage files, compose configurations, and workload state.
+
+#### 2. Homelab Core Platform Stack (`~/Core`)
+- **Host Foundation & Invariant Boundary**: Core defines NixOS host definitions, platform secrets, edge ingress, and security sandboxes.
+- **No Untrusted Webhooks**: Core does **not** register for webhook dispatch in `config/deployments.yaml`. External push events can never trigger an automated deployment or rebuild of Core.
+- **Read-Only Sandbox**: Under NixOS systemd sandboxing (`ProtectHome = "read-only"`), `homelab-appctl.service` has strictly read-only access to `/home/operator/Core`. The daemon cannot mutate the Core Git repository or run `git pull` on Core.
+- **Operator-Driven Update Workflow**: Core updates must be executed explicitly by the operator:
+  1. Review and pull repository changes:
+     ```bash
+     cd ~/Core && git pull --ff-only
+     ```
+  2. If NixOS modules or secrets changed, evaluate and activate the new system generation:
+     ```bash
+     sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure
+     ```
+  3. If Compose definitions changed, restart the platform stack:
+     ```bash
+     docker compose up -d --remove-orphans
+     # or via systemd:
+     sudo systemctl restart homeserver-core
+     ```
+  4. Individual platform services can be restarted via appctl using an authenticated admin token (`appctl restart traefik`, `appctl restart authelia`).
 
 ---
 
@@ -279,3 +315,275 @@ To bring up a replacement host from version control:
    ```bash
    sudo systemctl start homeserver-core
    ```
+
+---
+
+## 7. Operator Account Migration Runbook (Decision D2: Staged Coexistence Cutover)
+
+> [!CAUTION]
+> **MAINTENANCE WINDOW REQUIRED — EXECUTION ON LIVE HOST CURRENTLY BLOCKED**  
+> Live execution of this runbook against production hosts is strictly blocked until an authorized platform maintenance window is scheduled. This runbook is codified for procedural readiness and dry-run verification only.
+
+This runbook defines the 4-stage staged coexistence cutover procedure to migrate host operation from a legacy personal operator account (`<legacy-operator>`) to the platform standard `operator` user (`uid = 1000`, `extraGroups = [ "wheel" "docker" "homelab-operators" "networkmanager" ]`), fulfilling Decision D2 and eliminating personal identity coupling.
+
+### Stage 1: Pre-Flight Checks & Session Preservation
+
+> [!IMPORTANT]
+> **Maintain Active Legacy Shell Session**:  
+> Do not terminate your active SSH or terminal session as `<legacy-operator>`. Keep at least one authenticated shell open throughout the entire cutover process to prevent lockout in case of SSH key, user profile, or PAM misconfiguration.
+
+1. **Verify or provision `operator` account**:
+   Check if the `operator` user exists in the running environment:
+   ```bash
+   id operator
+   ```
+   If `operator` does not exist yet (as `homelab.operatorUser` has not been switched in the active NixOS generation), provision the initial coexistence user before proceeding:
+   ```bash
+   sudo useradd -m -s /run/current-system/sw/bin/bash -G wheel,docker,homelab-operators operator
+   ```
+
+2. **Verify SSH key provisioning & permissions**:
+   Ensure the operator's authorized keys are installed with strict permissions (copying from `<legacy-operator>` if needed):
+   ```bash
+   sudo mkdir -p /home/operator/.ssh
+   if [ ! -f /home/operator/.ssh/authorized_keys ] && [ -f /home/<legacy-operator>/.ssh/authorized_keys ]; then
+     sudo cp /home/<legacy-operator>/.ssh/authorized_keys /home/operator/.ssh/authorized_keys
+   fi
+   sudo chmod 700 /home/operator/.ssh
+   sudo chmod 600 /home/operator/.ssh/authorized_keys
+   sudo chown -R operator:users /home/operator/.ssh
+   ```
+
+3. **Verify administrative (`sudo`) access**:
+   Test that `operator` can authenticate and execute privileged commands without failure:
+   ```bash
+   sudo -u operator sudo -n true || echo "Passwordless or password sudo required for operator"
+   ```
+
+4. **Prepare persistent directories**:
+   Ensure `/home/operator/Sites`, `/home/operator/Core`, `/home/operator/var/lib/homelab`, and state parent paths are ready:
+   ```bash
+   sudo mkdir -p /home/operator/{Core,Sites,.config/homelab,var/lib/homelab,.local/state/homelab}
+   sudo chown -R operator:homelab-operators /home/operator/{Core,Sites,.config,var,.local}
+   ```
+
+---
+
+### Stage 2: State and Repository Synchronization
+Synchronize repository checkouts, workload persistent data, and runtime state from the legacy user account to `/home/operator/` using non-destructive archive flags (`-aHAX` preserves hard links, attributes, and extended ACLs):
+
+1. **Initial background synchronization**:
+   Seed the file trees for Core, Sites, workload databases, and configurations while services continue running:
+   ```bash
+   sudo rsync -aHAX --info=progress2 \
+     --exclude=".venv" \
+     --exclude=".pytest_cache" \
+     /home/<legacy-operator>/Core/ /home/operator/Core/
+
+   sudo rsync -aHAX --info=progress2 \
+     /home/<legacy-operator>/Sites/ /home/operator/Sites/
+
+   if [ -d "/home/<legacy-operator>/var/lib/homelab" ]; then
+     sudo rsync -aHAX --info=progress2 \
+       /home/<legacy-operator>/var/lib/homelab/ /home/operator/var/lib/homelab/
+   fi
+
+   if [ -d "/home/<legacy-operator>/.local/state/homelab" ]; then
+     sudo rsync -aHAX --info=progress2 \
+       /home/<legacy-operator>/.local/state/homelab/ /home/operator/.local/state/homelab/
+   fi
+
+   if [ -d "/home/<legacy-operator>/.config/homelab" ]; then
+     sudo rsync -aHAX --info=progress2 \
+       /home/<legacy-operator>/.config/homelab/ /home/operator/.config/homelab/
+   fi
+   ```
+
+2. **Quiesce active database writers**:
+   Stop running workload containers and the Core platform stack to guarantee point-in-time consistency across SQLite databases (e.g. LLDAP `users.db`, Authelia `db.sqlite3`, Stalwart storage, and workload app volumes in `~/var/lib/homelab/`) before the final sync:
+   ```bash
+   # Stop running workload containers
+   appctl down --all 2>/dev/null || docker stop $(docker ps -q) 2>/dev/null || true
+
+   # Stop platform core services
+   sudo systemctl stop homeserver-core
+   sudo systemctl stop homelab-appctl
+   sudo systemctl stop homelab-gitops
+   ```
+
+3. **Final delta synchronization (`--delete`)**:
+   Perform a rapid final delta synchronization with `--delete` to capture the quiesced database state and prune removed files:
+   ```bash
+   sudo rsync -aHAX --delete --info=progress2 \
+     --exclude=".venv" \
+     --exclude=".pytest_cache" \
+     /home/<legacy-operator>/Core/ /home/operator/Core/
+
+   sudo rsync -aHAX --delete --info=progress2 \
+     /home/<legacy-operator>/Sites/ /home/operator/Sites/
+
+   if [ -d "/home/<legacy-operator>/var/lib/homelab" ]; then
+     sudo rsync -aHAX --delete --info=progress2 \
+       /home/<legacy-operator>/var/lib/homelab/ /home/operator/var/lib/homelab/
+   fi
+
+   if [ -d "/home/<legacy-operator>/.local/state/homelab" ]; then
+     sudo rsync -aHAX --delete --info=progress2 \
+       /home/<legacy-operator>/.local/state/homelab/ /home/operator/.local/state/homelab/
+   fi
+   ```
+
+4. **Fix ownership and permissions**:
+   Set primary ownership to `operator` and group to `homelab-operators` across all migrated trees:
+   ```bash
+   sudo chown -R operator:homelab-operators \
+     /home/operator/Core \
+     /home/operator/Sites \
+     /home/operator/.config \
+     /home/operator/.local \
+     /home/operator/var
+   sudo chmod -R u+rwX,g+rX /home/operator/Core /home/operator/Sites /home/operator/var
+
+   # ACME certificate security invariant: Traefik strictly requires 0600 on acme.json;
+   # recursive group read permissions will cause Traefik to refuse to start.
+   if [ -f /home/operator/Core/config/letsencrypt/acme.json ]; then
+     sudo chmod 600 /home/operator/Core/config/letsencrypt/acme.json
+   fi
+   ```
+
+---
+
+### Stage 3: Service Rebuild & Environment Cutover
+Activate the declarative configuration under the `operator` profile:
+
+1. **Configure instance domain injection (Decision D1)**:
+   Ensure `nixos/instance.nix` (or `/etc/nixos/homelab-instance.nix`) is in place with the host's production domain:
+   ```bash
+   cat << 'EOF' | sudo -u operator tee /home/operator/Core/nixos/instance.nix > /dev/null
+   {
+     homelab.domain = "example.com";
+   }
+   EOF
+   chmod 600 /home/operator/Core/nixos/instance.nix
+   ```
+
+2. **Bootstrap appctl control plane tokens (CR-SO-08)**:
+   The `homelab-appctl.service` control plane daemon enforces 3-role RBAC (`homelab-admin`, `homelab-operator`, `homelab-viewer`) authenticated via SHA-256 Bearer tokens stored in `/run/secrets/appctl/tokens.json`.
+
+   Generate the operator administrator token and local CLI credentials:
+   ```bash
+   sudo -u operator python3 /home/operator/Core/scripts/bootstrap_token.py
+   ```
+   This command:
+   - Creates `~/.config/homelab/token` (mode `0600`) owned by `operator:homelab-operators` containing the raw Bearer token used automatically by the `appctl` CLI.
+   - Outputs the JSON token descriptor containing the SHA-256 digest:
+     ```json
+     {
+       "token_id": "operator-admin",
+       "identity": "operator",
+       "role": "homelab-admin",
+       "sha256": "<64-character-sha256-digest>"
+     }
+     ```
+
+   > [!IMPORTANT]
+   > **Unprovisioned Token Behavior & RBAC Fallback**:
+   > If tokens are not provisioned in `/run/secrets/appctl/tokens.json`, local UDS connections (`/run/homelab/appctl.sock`) fall back to Linux `SO_PEERCRED` socket credentials, granting callers in `homelab-operators` the read-only `homelab-viewer` role.
+   > Under `homelab-viewer`, safe queries succeed (`appctl list`, `appctl status`, `appctl health`).
+   > However, **all mutating and privileged operations** (`appctl up`, `appctl down`, `appctl restart`, `appctl update`, `appctl deploy`, `appctl config`, `appctl info`) **strictly require** a valid Bearer token with `homelab-operator` or `homelab-admin` role. If tokens are not enrolled in SOPS, attempting mutating actions fails with HTTP 403 `ERR_PERMISSION_DENIED`.
+
+   Enroll the token descriptor into SOPS secrets:
+   ```bash
+   sops /home/operator/Core/nixos/secrets.yaml
+   ```
+   Under `appctl.tokens_json`, insert the descriptor into the JSON array:
+   ```yaml
+   appctl:
+     tokens_json: |
+       [
+         {
+           "token_id": "operator-admin",
+           "identity": "operator",
+           "role": "homelab-admin",
+           "sha256": "<paste-sha256-digest-here>"
+         }
+       ]
+   ```
+   *(Optional: If GitOps webhook dispatch is enabled, generate and enroll a `gitops-webhook` token with `homelab-operator` role using `python3 scripts/bootstrap_token.py --identity gitops --role homelab-operator --token-id gitops-webhook --print-json`).*
+
+3. **Rebuild NixOS host configuration**:
+   Execute the rebuild from the new canonical Core path using `--impure` and the `path:` scheme to import the untracked instance profile:
+   ```bash
+   cd /home/operator/Core
+   sudo nixos-rebuild switch --flake path:/home/operator/Core#server --impure
+   ```
+
+   > [!NOTE]
+   > The `path:` scheme instructs Nix to evaluate directly from the filesystem without filtering by the Git index, ensuring untracked/gitignored `nixos/instance.nix` is evaluated. (If using `/etc/nixos/homelab-instance.nix`, bare `--flake .#server --impure` works directly). Rebuilding also decrypts and projects `/run/secrets/appctl/tokens.json` via `sops-nix`.
+
+4. **Restart platform services**:
+   Restart the Core Compose stack and control plane services to consume updated paths and secrets:
+   ```bash
+   sudo systemctl restart homeserver-core
+   sudo systemctl restart homelab-appctl
+   sudo systemctl restart homelab-gitops
+   ```
+
+---
+
+### Stage 4: Post-Flight Verification
+Validate system health and operational readiness under the `operator` identity:
+
+1. **Verify Git safe directory**:
+   Ensure Git does not complain about dubious ownership when invoked by `operator` or `homelab-appctl`:
+   ```bash
+   sudo -u operator git -C /home/operator/Core status
+   sudo -u operator git -C /home/operator/Sites/<any-workload> status
+   ```
+
+2. **Verify SOPS secrets and tokens projection**:
+   Ensure `/run/secrets/appctl/tokens.json` is readable by `homelab-appctl` (mode `0400`, owned by `homelab-appctl:homelab-operators`) and contains valid descriptors:
+   ```bash
+   sudo ls -l /run/secrets/appctl/tokens.json
+   ```
+
+3. **Verify appctl control plane status & RBAC authentication**:
+   Execute CLI inspection using both UDS peercred authentication (read-only viewer fallback) and authenticated admin token operations:
+   ```bash
+   # 1. Peercred UDS inspection (demonstrates viewer fallback for read-only actions)
+   sudo -u operator appctl list --core
+   sudo -u operator appctl status
+   sudo -u operator appctl health
+
+   # 2. Authenticated operator admin verification (requires homelab-admin Bearer token)
+   sudo -u operator appctl info docs
+   sudo -u operator appctl config docs
+   ```
+   Confirm that `info` and `config` return resolved configuration without `ERR_PERMISSION_DENIED`, verifying that `~/.config/homelab/token` matches the provisioned SHA-256 digest in `/run/secrets/appctl/tokens.json`.
+
+4. **Verify container reachability & proxy routing**:
+   Check that external endpoints and internal reverse proxies resolve:
+   ```bash
+   docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+   curl -s -k https://127.0.0.1 -H "Host: dashboard.example.com" | head -n 5
+   ```
+
+---
+
+### Rollback Procedure
+If unexpected service degradation occurs during the cutover:
+
+1. **Revert NixOS system generation**:
+   ```bash
+   sudo nixos-rebuild switch --rollback
+   ```
+
+2. **Restart legacy Core services**:
+   ```bash
+   sudo systemctl restart homeserver-core
+   sudo systemctl restart homelab-appctl
+   sudo systemctl restart homelab-gitops
+   ```
+
+3. **Log rollback reason**:
+   Record the diagnostic failure logs in `journalctl -xe` and investigate before attempting another cutover window.

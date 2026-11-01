@@ -1,5 +1,5 @@
 # 🌐 Server NixOS Configuration — Turnkey Headless Homelab Appliance
-# Standalone declarative configuration for the roadtotech.me homelab server.
+# Standalone declarative configuration for the homelab server.
 # No Home Manager. No shared desktop modules.
 # Goal: wipe & restore from any NixOS installation via `nixos-install --flake ~/Core#server`
 
@@ -12,7 +12,20 @@
     ./modules/traefik-deployments.nix # Traefik deployment secrets and env templates
     ./modules/dynu.nix                # Dynu DDNS smart IP monitor service
     ./modules/shell.nix               # Declarative bash environment for the server
-  ];
+  ] ++ lib.optional (builtins.pathExists ./instance.nix) ./instance.nix
+    ++ lib.optional (builtins.pathExists /etc/nixos/homelab-instance.nix) /etc/nixos/homelab-instance.nix;
+
+  # ── Homelab platform settings ────────────────────────────────────────────────
+  homelab.operatorUser = "operator";
+
+  # ── Host Git Safe Directory ──────────────────────────────────────────────────
+  programs.git = {
+    enable = true;
+    config.safe.directory = [
+      "/home/${config.homelab.operatorUser}/Core"
+      "/home/${config.homelab.operatorUser}/Sites/*"
+    ];
+  };
 
   # ── SOPS secrets configuration ──────────────────────────────────────────────
   # Set once here to avoid duplicate-option conflicts across submodules
@@ -54,15 +67,17 @@
   networking.networkmanager.enable = true;
 
   # ── User account ─────────────────────────────────────────────────────────────
-  users.users.kiskaadee = {
+  users.users.${config.homelab.operatorUser} = {
     isNormalUser = true;
+    description = "Primary server administrator";
     openssh.authorizedKeys.keys = [
       "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICAVPPMk+WApUd/fo78+lsRGnLKSlY4GDZiNGKwBAifD"
     ];
     extraGroups = [
-      "wheel"          # sudo access
-      "docker"         # run docker without sudo
-      "networkmanager" # modify network settings
+      "wheel"             # sudo access
+      "docker"            # run docker without sudo
+      "homelab-operators" # access /run/homelab/appctl.sock
+      "networkmanager"    # modify network settings
     ];
   };
 

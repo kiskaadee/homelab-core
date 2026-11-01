@@ -4,13 +4,13 @@
 - Knowledge & Notes:
     - Docs-Viewer:
         icon: files.png
-        href: https://docs.roadtotech.me
+        href: https://docs.example.test
         description: Reactive Obsidian & Markdown Documentation Viewer
         server: my-docker
         container: docs
     - Excalidraw:
         icon: excalidraw.png
-        href: https://excalidraw.roadtotech.me
+        href: https://excalidraw.example.test
         description: Collaborative Whiteboarding & Sketching Tool
         server: my-docker
         container: excalidraw
@@ -18,7 +18,7 @@
 - Media & Productivity:
     - Jellyfin:
         icon: jellyfin.png
-        href: https://jellyfin.roadtotech.me
+        href: https://jellyfin.example.test
         description: Media Server & Streaming Hub
         server: my-docker
         container: jellyfin

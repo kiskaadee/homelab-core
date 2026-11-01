@@ -32,24 +32,64 @@ sudo ls -l /etc/ssh/ssh_host_ed25519_key
 sudo chmod 600 /etc/ssh/ssh_host_ed25519_key
 ```
 
-### Step 2: Apply Declarative NixOS Configuration
+### Step 2: Configure Appliance Instance Domain (Decision D1)
+To preserve strict platform genericism, the repository files tracked in Git never contain production domains or personal operator identities, defaulting to RFC 2606 placeholders (`example.test` and `operator`).
+
+An appliance host supplies its production domain and local configuration overrides via one of two untracked dual-path files:
+1. **Repository-local instance profile (`nixos/instance.nix`)**:
+   Create an untracked, git-ignored file in `nixos/instance.nix`:
+   ```nix
+   {
+     homelab.domain = "example.com";
+   }
+   ```
+   When rebuilding via `sudo nixos-rebuild switch --flake path:/home/operator/Core#server --impure` (or `path:~/Core#server --impure`), Nix automatically imports `nixos/instance.nix` if present.
+
+   > [!NOTE]
+   > **Flake Fetcher Scheme for Untracked Files**:
+   > Because `nixos/instance.nix` is gitignored, Nix's default Git fetcher filters it out when evaluating standard Git flake references (e.g. `--flake ~/Core#server`). Prefixing the path with the `path:` scheme (e.g. `path:/home/operator/Core#server` or `path:~/Core#server`) instructs Nix to evaluate directly from the filesystem without filtering by the Git index.
+   > If using the host-level `/etc/nixos/homelab-instance.nix` instead, a bare `--flake .#server --impure` works directly because `/etc/nixos` resides outside the Git repository tree.
+
+2. **Host-level instance profile (`/etc/nixos/homelab-instance.nix`)**:
+   Alternatively, create a host-level file outside the Git checkout:
+   ```nix
+   {
+     homelab.domain = "example.com";
+   }
+   ```
+   This persists configuration across fresh repository clones or ephemeral branches.
+
+Both paths are declared optionally in `nixos/configuration.nix`:
+```nix
+imports = [
+  ./hardware-configuration.nix
+  ./modules/homeserver.nix
+  ./modules/traefik-deployments.nix
+  ./modules/dynu.nix
+  ./modules/shell.nix
+] ++ lib.optional (builtins.pathExists ./instance.nix) ./instance.nix
+  ++ lib.optional (builtins.pathExists /etc/nixos/homelab-instance.nix) /etc/nixos/homelab-instance.nix;
+```
+When present, `homelab.domain` overrides the default (`example.test`), and all generated templates (`homeserver.env`, Traefik routing rules, and the dynamic `LLDAP_LDAP_BASE_DN`) automatically reflect the production domain without altering any tracked Git files.
+
+### Step 3: Apply Declarative NixOS Configuration
 ```bash
 cd ~/Core
-sudo nixos-rebuild switch --flake ~/Core#server
+sudo nixos-rebuild switch --flake path:/home/operator/Core#server --impure
 ```
 This configures:
 * Docker daemon, host firewall rules, and system packages.
 * Decrypted secret files in `/run/secrets/homeserver.env` and `/run/secrets/traefik-deployments.env`.
-* Systemd service units (`homeserver-core`, `homelab-gitops`, `dynu-monitor`).
+* Systemd service units (`homeserver-core`, `homelab-appctl`, `homelab-gitops`, `dynu-monitor`).
 
-### Step 3: Create External Docker Networks
+### Step 4: Create External Docker Networks
 The Core Compose stack and workloads require the `proxy-net` and `socket-net` bridge networks:
 ```bash
 docker network create proxy-net 2>/dev/null || true
 docker network create socket-net 2>/dev/null || true
 ```
 
-### Step 4: Start Platform Services
+### Step 5: Start Platform Services
 ```bash
 sudo systemctl start homeserver-core
 ```
@@ -58,7 +98,7 @@ Check running containers:
 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 ```
 
-### Step 5: Verify DNS & Certificates
+### Step 6: Verify DNS & Certificates
 1. Trigger an immediate DDNS update:
    ```bash
    sudo systemctl start dynu-monitor
@@ -68,7 +108,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
    appctl ssl traefik
    ```
 
-### Step 6: Initialize LLDAP Directory
+### Step 7: Initialize LLDAP Directory
 1. Navigate to `https://users.${HOMELAB_DOMAIN}` (e.g., `https://users.example.com`).
 2. Authenticate using `admin` and the password configured in `nixos/secrets.yaml` (`lldap/admin_password`).
 3. Create standard user accounts and assign them to required groups.

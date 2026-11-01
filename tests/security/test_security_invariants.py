@@ -2,19 +2,24 @@
 Security invariant tests for Docker Compose and container isolation.
 """
 
+import json
 import os
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import yaml
+from appctl_audit import AuditLogger, TargetLockManager
+from appctl_auth import Principal, Role
+from appctl_contracts import OperationRequest
+from appctl_router import OperationalRouter, assemble_workload_env
+from core_manifest import parse_manifest
 
+# Comment-out reason: testing pyproject-level pythonpath definition
 CORE_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def test_socket_proxy_is_strictly_read_only():
-
     """Ensure socket-proxy container blocks state-modifying requests (POST=0, DELETE=0)."""
     compose_path = CORE_ROOT / "docker-compose.yml"
     with open(compose_path, encoding="utf-8") as f:
@@ -47,8 +52,12 @@ def test_no_direct_docker_sock_mounts_except_socket_proxy():
         volumes = svc.get("volumes", [])
         for vol in volumes:
             if isinstance(vol, str) and "/var/run/docker.sock" in vol:
-                assert name == "socket-proxy", f"Service '{name}' directly mounts docker.sock!"
-                assert vol.endswith(":ro"), "socket-proxy docker.sock mount must be read-only (:ro)"
+                assert name == "socket-proxy", (
+                    f"Service '{name}' directly mounts docker.sock!"
+                )
+                assert vol.endswith(":ro"), (
+                    "socket-proxy docker.sock mount must be read-only (:ro)"
+                )
 
 
 def test_no_privileged_containers():
@@ -60,7 +69,9 @@ def test_no_privileged_containers():
     services = compose.get("services", {})
     for name, svc in services.items():
         privileged = svc.get("privileged", False)
-        assert privileged is not True, f"Service '{name}' is configured as privileged: true!"
+        assert privileged is not True, (
+            f"Service '{name}' is configured as privileged: true!"
+        )
 
 
 def test_no_shell_true_in_core_scripts():
@@ -78,10 +89,14 @@ def test_portainer_is_deprecated_and_absent():
         compose = yaml.safe_load(f)
 
     services = compose.get("services", {})
-    assert "portainer" not in services, "Deprecated service 'portainer' must not exist in docker-compose.yml"
+    assert "portainer" not in services, (
+        "Deprecated service 'portainer' must not exist in docker-compose.yml"
+    )
 
     volumes = compose.get("volumes", {}) or {}
-    assert "portainer_data" not in volumes, "Deprecated volume 'portainer_data' must not exist in docker-compose.yml"
+    assert "portainer_data" not in volumes, (
+        "Deprecated volume 'portainer_data' must not exist in docker-compose.yml"
+    )
 
 
 def test_no_eval_in_appctl_script():
@@ -91,10 +106,9 @@ def test_no_eval_in_appctl_script():
     assert "eval " not in content, "Dangerous 'eval' detected in scripts/appctl!"
 
 
-def test_appctl_env_injection_resilience(tmp_path: Path):
+def test_appctl_env_injection_resilience(tmp_path: Path, monkeypatch):
     """Ensure environment values from app.yaml cannot execute shell commands via command substitution
-
-    in scripts/appctl during environment setup. Executes scripts/appctl directly with a mock docker binary.
+    during P4 production environment assembly and router dispatch. Executes OperationalRouter with a mock docker binary.
     """
     canary = tmp_path / "pwned.txt"
     payload = f"$(touch {canary})"
@@ -113,16 +127,26 @@ env:
 """
 
     (app_dir / "app.yaml").write_text(app_yaml.strip(), encoding="utf-8")
-    (app_dir / "docker-compose.yml").write_text("services:\n  web:\n    image: nginx\n", encoding="utf-8")
+    (app_dir / "docker-compose.yml").write_text(
+        "services:\n  web:\n    image: nginx\n", encoding="utf-8"
+    )
 
-    # 2. Setup mock docker binary to capture environment without requiring a running Docker daemon
+    # 2. Verify unit-level pure Python environment assembly
+    monkeypatch.setenv("HOMELAB_DOMAIN", "example.test")
+    manifest = parse_manifest(app_dir / "app.yaml")
+    assembled_env = assemble_workload_env(app_dir, manifest, "vuln-app")
+    assert not canary.exists(), "Command substitution executed during assemble_workload_env!"
+    assert assembled_env["INJECTION_TEST"] == payload
+    assert assembled_env["NORMAL_VAR"] == "safe_value"
+
+    # 3. Setup mock docker binary to capture environment without requiring a running Docker daemon
     mock_bin = tmp_path / "bin"
     mock_bin.mkdir()
     mock_docker = mock_bin / "docker"
     bash_bin = shutil.which("bash") or "bash"
 
     mock_docker_script = f"""#!{bash_bin}
-if [ "$1" = "compose" ] && [ "$2" = "config" ]; then
+if [ "$1" = "compose" ] && [ "$4" = "config" ]; then
   echo "MOCK_DOCKER_COMPOSE_CONFIG"
   echo "CAPTURED_INJECTION=$INJECTION_TEST"
   echo "CAPTURED_NORMAL=$NORMAL_VAR"
@@ -133,45 +157,59 @@ exit 0
     mock_docker.write_text(mock_docker_script, encoding="utf-8")
     mock_docker.chmod(0o755)
 
-    # 3. Execute scripts/appctl config vuln-app directly
-    appctl_path = CORE_ROOT / "scripts" / "appctl"
-    env = os.environ.copy()
-    if "NIX_PYTHONPATH" in env and "PYTHONPATH" not in env:
-        env["PYTHONPATH"] = env["NIX_PYTHONPATH"]
-    env["PATH"] = f"{mock_bin}:{Path(sys.executable).parent}:{env['PATH']}"
-    env["PYTHON_BIN"] = sys.executable
-    env["SITES_DIR"] = str(sites_dir)
-    env["HOMELAB_DOMAIN"] = "example.test"
-    env["CORE_DIR"] = str(CORE_ROOT)
-
-    res = subprocess.run(
-        [bash_bin, str(appctl_path), "config", "vuln-app"],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+    # 4. Dispatch workload.config through OperationalRouter
+    monkeypatch.setenv("PATH", f"{mock_bin}:{os.environ.get('PATH', '')}")
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=sites_dir,
+        core_dir=CORE_ROOT,
+    )
+    req = OperationRequest.model_validate({
+        "operation": "workload.config",
+        "target": "vuln-app",
+    })
+    admin_principal = Principal(
+        identity="operator",
+        role=Role.ADMIN,
+        token_id="tok_admin",
+        auth_method="bearer_token",
     )
 
+    resp = router.dispatch(req, admin_principal)
 
-    # 4. Assertions: command substitution was not executed, script ran, and mock docker received literal value
-    assert not canary.exists(), "Command substitution was executed on the host during environment setup!"
-    assert res.returncode == 0, f"appctl config failed: {res.stderr}\nStdout: {res.stdout}"
-    assert "MOCK_DOCKER_COMPOSE_CONFIG" in res.stdout
-    assert f"CAPTURED_INJECTION={payload}" in res.stdout
-    assert "CAPTURED_NORMAL=safe_value" in res.stdout
-    assert "/dangerous/override" not in res.stdout
+    # 5. Assertions: command substitution was not executed, router succeeded, mock docker received literal value
+    assert not canary.exists(), (
+        "Command substitution was executed on the host during environment setup!"
+    )
+    assert resp.success is True, (
+        f"OperationalRouter dispatch failed: {resp.error}"
+    )
+    assert resp.result is not None
+    output = resp.result.get("output", "")
+    assert "MOCK_DOCKER_COMPOSE_CONFIG" in output
+    assert f"CAPTURED_INJECTION={payload}" in output
+    assert "CAPTURED_NORMAL=safe_value" in output
 
 
 def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests():
     """Ensure personal domains and operator usernames are absent from scripts, tests, and documentation."""
     forbidden = ["roadtotech.me", "kiskaadee"]
-    root_dirs = [CORE_ROOT / "scripts", CORE_ROOT / "tests", CORE_ROOT / "docs"]
+    root_dirs = [
+        CORE_ROOT / "scripts",
+        CORE_ROOT / "tests",
+        CORE_ROOT / "docs",
+        CORE_ROOT / "nixos" / "modules",
+        CORE_ROOT / "config",
+    ]
     root_files = [
         CORE_ROOT / "README.md",
         CORE_ROOT / "ROADMAP.md",
         CORE_ROOT / "AGENTS.md",
         CORE_ROOT / "SECURITY.md",
         CORE_ROOT / "flake.nix",
+        CORE_ROOT / "docker-compose.yml",
+        CORE_ROOT / "nixos" / "configuration.nix",
     ]
     violations = []
 
@@ -182,16 +220,310 @@ def test_platform_genericism_no_hardcoded_personal_domains_in_scripts_and_tests(
     for file_path in candidate_files:
         if (
             file_path.is_file()
-            and file_path.suffix in (".py", ".sh", ".bash", ".yml", ".yaml", ".md", ".nix", "")
+            and file_path.suffix
+            in (".py", ".sh", ".bash", ".yml", ".yaml", ".md", ".nix", "")
             and file_path.name != "test_security_invariants.py"
         ):
             content = file_path.read_text(encoding="utf-8", errors="ignore")
             for term in forbidden:
                 if term in content:
-                    violations.append(f"{file_path.relative_to(CORE_ROOT)}: contains prohibited literal '{term}'")
+                    violations.append(
+                        f"{file_path.relative_to(CORE_ROOT)}: contains prohibited literal '{term}'"
+                    )
 
-    assert not violations, "Platform genericism violations detected:\n" + "\n".join(violations)
+    assert not violations, "Platform genericism violations detected:\n" + "\n".join(
+        violations
+    )
 
+
+def test_docker_compose_authelia_and_lldap_base_dn():
+    """Ensure both lldap and authelia services receive LLDAP_LDAP_BASE_DN in docker-compose.yml."""
+    compose_path = CORE_ROOT / "docker-compose.yml"
+    with open(compose_path, encoding="utf-8") as f:
+        compose = yaml.safe_load(f)
+
+    services = compose.get("services", {})
+    assert "lldap" in services, "lldap service must exist in docker-compose.yml"
+    assert "authelia" in services, "authelia service must exist in docker-compose.yml"
+
+    def get_env_map(svc_def: dict) -> dict[str, str]:
+        env_items = svc_def.get("environment", [])
+        res = {}
+        for item in env_items:
+            if isinstance(item, str) and "=" in item:
+                k, v = item.split("=", 1)
+                res[k.strip()] = v.strip()
+        return res
+
+    lldap_env = get_env_map(services["lldap"])
+    authelia_env = get_env_map(services["authelia"])
+
+    assert "LLDAP_LDAP_BASE_DN" in lldap_env, (
+        "LLDAP_LDAP_BASE_DN must be declared in lldap environment"
+    )
+    assert "LLDAP_LDAP_BASE_DN" in authelia_env, (
+        "LLDAP_LDAP_BASE_DN must be passed to authelia environment for LDAP template expansion"
+    )
+
+
+def test_nixos_homeserver_env_template_defines_dynamic_base_dn():
+    """Ensure homeserver.nix derives LLDAP_LDAP_BASE_DN dynamically from homelab.domain."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    assert "LLDAP_LDAP_BASE_DN" in content, (
+        "homeserver.nix must define LLDAP_LDAP_BASE_DN in homeserver.env template"
+    )
+    assert 'lib.splitString "."' in content or "splitString" in content, (
+        "homeserver.nix must compute LDAP base DN dynamically from domain components"
+    )
+
+
+def test_nixos_tmpfiles_rules_use_recursive_acls():
+    """Ensure tmpfiles.rules uses uppercase A+ for recursive ACL inheritance on sites and homepage."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    assert '"A+ ${config.homelab.sitesDir}' in content, (
+        "tmpfiles.rules must use uppercase 'A+' for recursive ACL inheritance on sitesDir"
+    )
+    assert '"A+ ${config.homelab.coreDir}/config/homepage' in content, (
+        "tmpfiles.rules must use uppercase 'A+' for recursive ACL inheritance on homepage config"
+    )
+
+
+def test_nixos_tmpfiles_rules_creates_operator_var_lib_homelab():
+    """Ensure tmpfiles.rules creates operator var/lib/homelab state dir before ACL assignment (#22)."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    expected_create = '"d /home/${config.homelab.operatorUser}/var/lib/homelab 0755 ${config.homelab.operatorUser} users -"'
+    expected_acl = '"A+ /home/${config.homelab.operatorUser}/var/lib/homelab - - - - d:u:homelab-appctl:rwx,u:homelab-appctl:rwx"'
+
+    assert expected_create in content, (
+        "tmpfiles.rules must declare creation of operator var/lib/homelab directory"
+    )
+    assert expected_acl in content, (
+        "tmpfiles.rules must declare ACLs for operator var/lib/homelab directory"
+    )
+    assert content.index(expected_create) < content.index(expected_acl), (
+        "operator var/lib/homelab directory creation must precede its ACL rule"
+    )
+
+
+def test_nixos_appctl_readwritepaths_optional_prefixes():
+    """Ensure appctl service ReadWritePaths uses '-' prefix for optional runtime paths (#22)."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    assert '"-/home/${config.homelab.operatorUser}/var/lib/homelab"' in content
+    assert '"-${config.homelab.coreDir}/config/homepage"' in content
+    assert '"-/var/lib/homelab/appctl"' in content
+    assert '"-/run/homelab"' in content
+
+
+def test_nixos_gitops_orders_after_appctl():
+    """Ensure homelab-gitops service declares after and wants dependency on homelab-appctl.service (#22)."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+
+    assert '"homelab-appctl.service"' in content
+
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        for attr in ["after", "wants"]:
+            cmd = [
+                nix_bin,
+                "eval",
+                f".#nixosConfigurations.server.config.systemd.services.homelab-gitops.{attr}",
+                "--json",
+            ]
+            res = subprocess.run(
+                cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+            )
+            data = json.loads(res.stdout)
+            assert "homelab-appctl.service" in data, (
+                f"homelab-gitops {attr} must include homelab-appctl.service"
+            )
+
+
+def test_default_homelab_domain_evaluates_to_example_test():
+    """Assert default homelab.domain in NixOS config evaluates to 'example.test'."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+    assert 'default = "example.test";' in content, (
+        "homeserver.nix must set default homelab.domain to 'example.test'"
+    )
+
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        cmd = [
+            nix_bin,
+            "eval",
+            ".#nixosConfigurations.server.config.homelab.domain",
+            "--raw",
+        ]
+        res = subprocess.run(
+            cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+        )
+        assert res.stdout.strip() == "example.test", (
+            f"Default homelab.domain must be 'example.test', got '{res.stdout.strip()}'"
+        )
+
+
+def test_dynamic_lldap_base_dn_splits_domain_components():
+    """Assert dynamic LLDAP_LDAP_BASE_DN splits domain into dc=... components for any domain."""
+    homeserver_nix = CORE_ROOT / "nixos" / "modules" / "homeserver.nix"
+    content = homeserver_nix.read_text(encoding="utf-8")
+    assert "LLDAP_LDAP_BASE_DN = ldapBaseDn;" in content, (
+        "homeserver.nix must bind LLDAP_LDAP_BASE_DN to ldapBaseDn in homeserver.env template"
+    )
+    assert 'domainParts = lib.splitString "." config.homelab.domain;' in content, (
+        "homeserver.nix must split homelab.domain by '.'"
+    )
+    assert 'ldapBaseDn = lib.concatStringsSep "," (map (part: "dc=${part}") domainParts);' in content, (
+        "homeserver.nix must map domain components into dc=${part}"
+    )
+
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        cases = [
+            ("example.test", "dc=example,dc=test"),
+            ("my.homelab.internal", "dc=my,dc=homelab,dc=internal"),
+            ("local", "dc=local"),
+        ]
+        for domain, expected_dn in cases:
+            expr = (
+                f'let flake = builtins.getFlake (toString ./.); lib = flake.inputs.nixpkgs.lib; '
+                f'domainParts = lib.splitString "." "{domain}"; '
+                f'in lib.concatStringsSep "," (map (part: "dc=${{part}}") domainParts)'
+            )
+            cmd = [
+                nix_bin,
+                "eval",
+                "--impure",
+                "--expr",
+                expr,
+                "--raw",
+            ]
+            res = subprocess.run(
+                cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+            )
+            assert res.stdout.strip() == expected_dn, (
+                f"Expected {expected_dn} for domain {domain}, got {res.stdout.strip()}"
+            )
+
+        # Also assert rendered sops template in default configuration contains correct LLDAP_LDAP_BASE_DN
+        cmd_tpl = [
+            nix_bin,
+            "eval",
+            '.#nixosConfigurations.server.config.sops.templates."homeserver.env".content',
+            "--raw",
+        ]
+        res_tpl = subprocess.run(
+            cmd_tpl, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+        )
+        assert "LLDAP_LDAP_BASE_DN=dc=example,dc=test" in res_tpl.stdout
+
+
+def test_dual_path_import_overrides_homelab_domain():
+    """Assert dual-path import overrides homelab.domain when ./nixos/instance.nix is present."""
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        instance_nix = CORE_ROOT / "nixos" / "instance.nix"
+        try:
+            instance_nix.write_text(
+                '{ homelab.domain = "custom.internal"; }\n', encoding="utf-8"
+            )
+            cmd = [
+                nix_bin,
+                "eval",
+                "--impure",
+                "path:.#nixosConfigurations.server.config.homelab.domain",
+                "--raw",
+            ]
+            res = subprocess.run(
+                cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+            )
+            assert res.stdout.strip() == "custom.internal", (
+                f"Expected homelab.domain to be overridden to 'custom.internal', got '{res.stdout.strip()}'"
+            )
+        finally:
+            if instance_nix.exists():
+                instance_nix.unlink()
+
+
+def test_nixos_configuration_declares_dual_path_instance_imports():
+    """Ensure nixos/configuration.nix includes optional dual-path instance imports."""
+    config_nix = CORE_ROOT / "nixos" / "configuration.nix"
+    content = config_nix.read_text(encoding="utf-8")
+    assert "builtins.pathExists ./instance.nix" in content, (
+        "nixos/configuration.nix must check for ./instance.nix via builtins.pathExists"
+    )
+    assert "builtins.pathExists /etc/nixos/homelab-instance.nix" in content, (
+        "nixos/configuration.nix must check for /etc/nixos/homelab-instance.nix via builtins.pathExists"
+    )
+
+
+def test_gitignore_includes_instance_nix():
+    """Ensure nixos/instance.nix is ignored in .gitignore to preserve platform genericism."""
+    gitignore = CORE_ROOT / ".gitignore"
+    content = gitignore.read_text(encoding="utf-8")
+    lines = [line.strip() for line in content.splitlines()]
+    assert "nixos/instance.nix" in lines, (
+        "nixos/instance.nix must be explicitly ignored in .gitignore"
+    )
+
+
+def test_nixos_switch_alias_uses_path_and_impure():
+    """Ensure nix-switch alias in nixos/modules/shell.nix uses path: and --impure to prevent silent fail-open."""
+    shell_nix = CORE_ROOT / "nixos" / "modules" / "shell.nix"
+    content = shell_nix.read_text(encoding="utf-8")
+    assert 'nix-switch = "sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure";' in content, (
+        "nixos/modules/shell.nix must configure nix-switch alias with path:$HOME/Core#server --impure"
+    )
+
+
+def test_nixos_safe_directory_includes_core_and_sites():
+    """Ensure programs.git.config.safe.directory includes Core and Sites to prevent dubious ownership errors."""
+    config_nix = CORE_ROOT / "nixos" / "configuration.nix"
+    content = config_nix.read_text(encoding="utf-8")
+    assert '"/home/${config.homelab.operatorUser}/Core"' in content, (
+        "nixos/configuration.nix must include Core in git safe.directory"
+    )
+    assert '"/home/${config.homelab.operatorUser}/Sites/*"' in content, (
+        "nixos/configuration.nix must include Sites/* in git safe.directory"
+    )
+
+    nix_bin = shutil.which("nix")
+    if nix_bin and not os.environ.get("NIX_BUILD_TOP"):
+        cmd = [
+            nix_bin,
+            "eval",
+            ".#nixosConfigurations.server.config.programs.git.config",
+            "--json",
+        ]
+        res = subprocess.run(
+            cmd, cwd=CORE_ROOT, capture_output=True, text=True, check=True
+        )
+        import json
+
+        configs = json.loads(res.stdout)
+        safe_dirs = []
+        for cfg in configs:
+            if isinstance(cfg, dict) and "safe" in cfg and "directory" in cfg["safe"]:
+                dirs = cfg["safe"]["directory"]
+                if isinstance(dirs, list):
+                    safe_dirs.extend(dirs)
+                else:
+                    safe_dirs.append(dirs)
+
+        assert "/home/operator/Core" in safe_dirs, (
+            f"Expected '/home/operator/Core' in git safe.directory, got {safe_dirs}"
+        )
+        assert "/home/operator/Sites/*" in safe_dirs, (
+            f"Expected '/home/operator/Sites/*' in git safe.directory, got {safe_dirs}"
+        )
 
 
 

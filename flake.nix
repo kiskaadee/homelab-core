@@ -52,6 +52,7 @@
           git
           pythonEnv
           ruff
+          pyright
         ];
       } ''
         mkdir -p $out
@@ -59,6 +60,7 @@
         chmod -R u+w source
         cd source
         HOME=/tmp ruff check --no-cache .
+        HOME=/tmp pyright
         HOME=/tmp pytest -o cache_dir=/tmp/.pytest_cache tests/
       '';
     };

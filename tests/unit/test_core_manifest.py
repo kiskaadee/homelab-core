@@ -2,15 +2,13 @@
 Unit test suite for scripts/core_manifest.py (Schema v1.0 & Parser Library).
 """
 
-import sys
 from pathlib import Path
 
 import pytest
 
-# Add scripts directory to path
-CORE_ROOT = Path(__file__).resolve().parent.parent.parent
-sys.path.insert(0, str(CORE_ROOT / "scripts"))
-
+# # Add scripts directory to path
+# CORE_ROOT = Path(__file__).resolve().parent.parent.parent
+# sys.path.insert(0, str(CORE_ROOT / "scripts"))
 from core_manifest import (
     Manifest,
     ManifestValidationError,
@@ -24,13 +22,17 @@ from core_manifest import (
 
 def test_validate_transport_https():
 
-    scheme, url = validate_transport("https://git.example.com/operator/homelab-snappymail.git")
+    scheme, url = validate_transport(
+        "https://git.example.com/operator/homelab-snappymail.git"
+    )
     assert scheme == TransportScheme.HTTPS
     assert url == "https://git.example.com/operator/homelab-snappymail.git"
 
 
 def test_validate_transport_ssh():
-    scheme, url = validate_transport("ssh://git@git.example.com:2223/operator/homelab-docs.git")
+    scheme, url = validate_transport(
+        "ssh://git@git.example.com:2223/operator/homelab-docs.git"
+    )
     assert scheme == TransportScheme.SSH
     assert url == "ssh://git@git.example.com:2223/operator/homelab-docs.git"
 
@@ -41,31 +43,103 @@ def test_validate_transport_git_scp():
     assert url == "git@github.com:operator/custom-workload.git"
 
 
-@pytest.mark.parametrize("insecure_url", [
-    "http://insecure.example.com/repo.git",
-    "http://github.com/repo.git",
-])
+@pytest.mark.parametrize(
+    "insecure_url",
+    [
+        "http://insecure.example.com/repo.git",
+        "http://github.com/repo.git",
+    ],
+)
 def test_validate_transport_rejects_http(insecure_url: str):
-    with pytest.raises(ManifestValidationError, match="Insecure HTTP source URL rejected"):
+    with pytest.raises(
+        ManifestValidationError, match="Insecure HTTP source URL rejected"
+    ):
         validate_transport(insecure_url)
 
 
-@pytest.mark.parametrize("traversal_url", [
-    "../../etc/shadow",
-    "/home/operator/secret",
-    "~/vault",
-    "file:///etc/passwd",
-])
+@pytest.mark.parametrize(
+    "empty_or_invalid_url",
+    [
+        "",
+        "   ",
+        None,
+    ],
+)
+def test_validate_transport_rejects_empty_or_non_string(empty_or_invalid_url):
+    with pytest.raises(
+        ManifestValidationError, match=r"^Source URL cannot be empty\.$"
+    ):
+        validate_transport(empty_or_invalid_url)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("root_path_url", "scheme"),
+    [
+        ("https://git.example.com/", "HTTPS"),
+        ("ssh://git.example.com/", "SSH"),
+    ],
+)
+def test_validate_transport_rejects_root_repository_path(
+    root_path_url: str, scheme: str
+):
+    with pytest.raises(
+        ManifestValidationError,
+        match=rf"^Malformed {scheme} source URL \(missing repository path\)",
+    ):
+        validate_transport(root_path_url)
+
+
+@pytest.mark.parametrize(
+    "traversal_url",
+    [
+        "../../etc/shadow",
+        "/home/operator/secret",
+        "~/vault",
+        r"repo\windows\payload",
+        r"..\traversal",
+    ],
+)
 def test_validate_transport_rejects_paths_and_traversal(traversal_url: str):
-    with pytest.raises(ManifestValidationError):
+    with pytest.raises(
+        ManifestValidationError,
+        match="Prohibited filesystem path or traversal in source URL",
+    ):
         validate_transport(traversal_url)
+
+
+def test_validate_transport_rejects_file_scheme():
+    with pytest.raises(
+        ManifestValidationError,
+        match="Invalid source.url scheme: 'file:///etc/passwd'",
+    ):
+        validate_transport("file:///etc/passwd")
+
+
+@pytest.mark.parametrize(
+    "empty_ref",
+    [
+        "",
+        "   ",
+        None,
+        12345,
+    ],
+)
+def test_classify_ref_empty_or_invalid_defaults_to_main(empty_ref):
+    assert classify_ref(empty_ref) == (RefType.BRANCH, "main")  # type: ignore[arg-type]
 
 
 def test_classify_ref_branches():
     assert classify_ref("main") == (RefType.BRANCH, "main")
     assert classify_ref("refs/heads/develop") == (RefType.BRANCH, "develop")
-    assert classify_ref("feat/manifest-engine") == (RefType.BRANCH, "feat/manifest-engine")
+    assert classify_ref("feat/manifest-engine") == (
+        RefType.BRANCH,
+        "feat/manifest-engine",
+    )
     assert classify_ref("release/v1.0") == (RefType.BRANCH, "release/v1.0")
+    assert classify_ref("custom-adhoc-branch") == (
+        RefType.BRANCH,
+        "custom-adhoc-branch",
+    )
 
 
 def test_classify_ref_tags():
@@ -145,7 +219,9 @@ deployment:
 
 
 def test_parse_manifest_rejects_missing_name():
-    with pytest.raises(ManifestValidationError, match="missing mandatory string field 'name'"):
+    with pytest.raises(
+        ManifestValidationError, match="missing mandatory string field 'name'"
+    ):
         parse_manifest("domain: test.example.com\n")
 
 
@@ -162,7 +238,9 @@ deployment:
     - compose_up
     - rm_rf_root
 """
-    with pytest.raises(ManifestValidationError, match="Prohibited deployment action 'rm_rf_root'"):
+    with pytest.raises(
+        ManifestValidationError, match="Prohibited deployment action 'rm_rf_root'"
+    ):
         parse_manifest(raw_yaml)
 
 
@@ -172,7 +250,9 @@ name: "app"
 deployment:
   strategy: "swarm"
 """
-    with pytest.raises(ManifestValidationError, match="Unsupported deployment strategy 'swarm'"):
+    with pytest.raises(
+        ManifestValidationError, match="Unsupported deployment strategy 'swarm'"
+    ):
         parse_manifest(raw_yaml)
 
 
@@ -185,24 +265,38 @@ def test_parse_manifest_from_path(tmp_path: Path):
     assert manifest.is_internal is True
 
 
-@pytest.mark.parametrize("invalid_key", [
-    "123_BAD",
-    "INVALID-KEY",
-    "FOO;BAR",
-    "KEY WITH SPACE",
-    "PATH",
-    "LD_PRELOAD",
-    "IFS",
-    "CORE_DIR",
-    "SITES_DIR",
-])
+@pytest.mark.parametrize(
+    "invalid_key",
+    [
+        "123_BAD",
+        "INVALID-KEY",
+        "FOO;BAR",
+        "KEY WITH SPACE",
+        "PATH",
+        "LD_PRELOAD",
+        "IFS",
+        "CORE_DIR",
+        "SITES_DIR",
+        "HOMELAB_DOMAIN",
+        "DOMAIN_SUFFIX",
+        "DOMAIN",
+        "PROXY_NETWORK",
+        "CERT_RESOLVER",
+        "DOCKER_CONFIG",
+        "SERVICE_NAME",
+        "CONTAINER_NAME",
+        "SERVICE_DOMAIN",
+    ],
+)
 def test_parse_manifest_rejects_invalid_or_reserved_env_keys(invalid_key: str):
     raw_yaml = f"""
 name: "app"
 env:
   "{invalid_key}": "some_value"
 """
-    with pytest.raises(ManifestValidationError, match="Invalid or reserved environment variable key"):
+    with pytest.raises(
+        ManifestValidationError, match="Invalid or reserved environment variable key"
+    ):
         parse_manifest(raw_yaml)
 
 
@@ -226,7 +320,9 @@ def test_parse_manifest_rejects_extra_fields():
 name: "app"
 unrecognized_field: "should_fail"
 """
-    with pytest.raises(ManifestValidationError, match="unrecognized or forbidden field"):
+    with pytest.raises(
+        ManifestValidationError, match="unrecognized or forbidden field"
+    ):
         parse_manifest(raw_yaml)
 
 
@@ -259,5 +355,3 @@ description: "Pydantic serialization test"
     assert dumped["name"] == "serialized-app"
     assert dumped["schemaVersion"] == "1.0"
     assert manifest.to_dict()["name"] == "serialized-app"
-
-

@@ -1,0 +1,596 @@
+"""
+test_appctl_cli.py — Unit Tests for Thin UDS Client (scripts/appctl_cli.py)
+"""
+
+from __future__ import annotations
+
+import io
+from pathlib import Path
+from unittest.mock import patch
+
+from appctl_cli import format_response, resolve_token, run_cli
+from appctl_contracts import (
+    ErrorCode,
+    OperationError,
+    OperationRequest,
+    OperationResponse,
+    OperationType,
+)
+
+
+def test_cli_token_resolution(tmp_path: Path, monkeypatch):
+    """Ensure token resolution checks CLI flag, environment, and config file."""
+    # 1. Direct CLI argument precedence
+    assert resolve_token("explicit-secret") == "explicit-secret"
+
+    # 2. Environment variable precedence
+    monkeypatch.setenv("APPCTL_TOKEN", "env-secret")
+    assert resolve_token(None) == "env-secret"
+
+    # 3. File fallback
+    monkeypatch.delenv("APPCTL_TOKEN", raising=False)
+    cfg_token = tmp_path / "token"
+    cfg_token.write_text("file-secret\n", encoding="utf-8")
+    with patch("pathlib.Path.home", return_value=tmp_path):
+        dot_config = tmp_path / ".config" / "homelab"
+        dot_config.mkdir(parents=True)
+        (dot_config / "token").write_text("user-file-secret\n", encoding="utf-8")
+        assert resolve_token(None) == "user-file-secret"
+
+
+def test_cli_format_response_success_and_error():
+    """Ensure response formatter produces human-friendly strings and JSON."""
+    success_resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_123",
+        operation=OperationType.WORKLOAD_DEPLOY,
+        output="Container started successfully",
+    )
+    formatted = format_response(success_resp, raw_json=False)
+    assert "Container started successfully" in formatted
+
+    raw_json = format_response(success_resp, raw_json=True)
+    assert '"operation": "workload.deploy"' in raw_json
+    assert '"success": true' in raw_json
+
+    error_resp = OperationResponse(
+        version="1.0",
+        success=False,
+        operation_id="op_456",
+        operation=OperationType.WORKLOAD_DEPLOY,
+        error=OperationError(code=ErrorCode.ERR_PERMISSION_DENIED, message="Forbidden"),
+    )
+    formatted_err = format_response(error_resp, raw_json=False)
+    assert "❌ Error [ERR_PERMISSION_DENIED]: Forbidden" in formatted_err
+
+
+def test_cli_dispatches_list_command():
+    """Ensure appctl list dispatches OperationRequest(workload.list)."""
+    mock_resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_001",
+        operation=OperationType.WORKLOAD_LIST,
+        output="NAME    STATUS\ndocs    running\n",
+    )
+
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+        ret = run_cli(["list", "--core"])
+        assert ret == 0
+        assert mock_send.call_count == 1
+        req: OperationRequest = mock_send.call_args[1]["operation_request"]
+        assert req.operation == OperationType.WORKLOAD_LIST
+        assert req.parameters["core"] is True
+        assert "NAME    STATUS" in mock_stdout.getvalue()
+
+
+def test_cli_dispatches_mutation_command():
+    """Ensure appctl up <target> dispatches OperationRequest(workload.deploy)."""
+    mock_resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_002",
+        operation=OperationType.WORKLOAD_DEPLOY,
+        target="jellyfin",
+        result={"action": "deployed", "message": "Workload deployed"},
+    )
+
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO) as mock_stdout:
+        ret = run_cli(["up", "jellyfin", "--token", "tok_secret"])
+        assert ret == 0
+        assert mock_send.call_count == 1
+        assert mock_send.call_args[1]["token"] == "tok_secret"
+        req: OperationRequest = mock_send.call_args[1]["operation_request"]
+        assert req.operation == OperationType.WORKLOAD_DEPLOY
+        assert req.target == "jellyfin"
+        assert "Workload deployed" in mock_stdout.getvalue()
+
+
+def test_cli_up_and_deploy_build_and_no_cache_flags():
+    """Ensure appctl up/deploy with --build and --no-cache flags dispatches correct parameters."""
+    mock_resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_build_01",
+        operation=OperationType.WORKLOAD_DEPLOY,
+        target="jellyfin",
+        result={"action": "deployed", "message": "Workload deployed"},
+    )
+
+    # 1. up with --build
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["up", "jellyfin", "--build", "--token", "tok_secret"])
+        assert ret == 0
+        req: OperationRequest = mock_send.call_args[1]["operation_request"]
+        assert req.operation == OperationType.WORKLOAD_DEPLOY
+        assert req.parameters.get("build") is True
+        assert req.parameters.get("no_cache") is False
+
+    # 2. up with --no-cache implies build=True
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["up", "jellyfin", "--no-cache", "--token", "tok_secret"])
+        assert ret == 0
+        req = mock_send.call_args[1]["operation_request"]
+        assert req.parameters.get("no_cache") is True
+        assert req.parameters.get("build") is True
+
+    # 3. deploy alias with --no-cache
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["deploy", "jellyfin", "--no-cache", "--token", "tok_secret"])
+        assert ret == 0
+        req = mock_send.call_args[1]["operation_request"]
+        assert req.parameters.get("no_cache") is True
+        assert req.parameters.get("build") is True
+
+
+def test_cli_update_build_and_no_cache_flags():
+    """Ensure appctl update with --build and --no-cache flags dispatches correct parameters."""
+    mock_resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_upd_01",
+        operation=OperationType.WORKLOAD_UPDATE,
+        target="jellyfin",
+        result={"action": "updated", "message": "Workload updated"},
+    )
+
+    # 1. update with --build
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["update", "jellyfin", "--build", "--token", "tok_secret"])
+        assert ret == 0
+        req: OperationRequest = mock_send.call_args[1]["operation_request"]
+        assert req.operation == OperationType.WORKLOAD_UPDATE
+        assert req.parameters.get("build") is True
+        assert req.parameters.get("no_cache", False) is False
+
+    # 2. update with --no-cache implies build=True
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["update", "jellyfin", "--no-cache", "--token", "tok_secret"])
+        assert ret == 0
+        req = mock_send.call_args[1]["operation_request"]
+        assert req.parameters.get("no_cache") is True
+        assert req.parameters.get("build") is True
+
+    # 3. update with --branch and --no-cache
+    with patch("appctl_cli.send_daemon_request", return_value=mock_resp) as mock_send, patch("sys.stdout", new_callable=io.StringIO):
+        ret = run_cli(["update", "jellyfin", "--branch", "main", "--no-cache", "--token", "tok_secret"])
+        assert ret == 0
+        req = mock_send.call_args[1]["operation_request"]
+        assert req.parameters.get("expected_branch") == "main"
+        assert req.parameters.get("no_cache") is True
+        assert req.parameters.get("build") is True
+
+
+def test_cli_handles_missing_socket():
+    """Ensure friendly stderr message when socket is absent."""
+    with patch("appctl_cli.send_daemon_request", side_effect=FileNotFoundError), patch("sys.stderr", new_callable=io.StringIO) as mock_stderr:
+        ret = run_cli(["list", "--socket", "/nonexistent/appctl.sock"])
+        assert ret == 1
+        assert "socket not found" in mock_stderr.getvalue()
+
+
+def test_cli_format_response_renders_workload_list_table():
+    """Ensure workload.list renders the canonical 5-column layout matching docs/appctl.md."""
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_list_01",
+        operation=OperationType.WORKLOAD_LIST,
+        result={
+            "total": 2,
+            "workloads": [
+                {
+                    "name": "snappymail",
+                    "type": "app",
+                    "domain": "mail.example.test",
+                    "deployment_status": "✓ Synced (main)",
+                    "provenance_status": "✓ Synced",
+                    "status": "🟢 Running (1)",
+                },
+                {
+                    "name": "traefik",
+                    "type": "core_service",
+                    "domain": "traefik.example.test",
+                    "deployment_status": "",
+                    "provenance_status": "— Core Platform",
+                    "status": "🟢 Running (1)",
+                },
+            ],
+            "message": "Found 2 workloads",
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    lines = rendered.splitlines()
+    assert len(lines) >= 4
+    assert lines[0] == "SERVICE          DEPLOYMENT             PROVENANCE               STATUS          DOMAIN"
+    assert lines[1] == "-------          ----------             ----------               ------          ------"
+    assert "snappymail" in lines[2]
+    assert "✓ Synced (main)" in lines[2]
+    assert "✓ Synced" in lines[2]
+    assert "🟢 Running (1)" in lines[2]
+    assert "mail.example.test" in lines[2]
+
+    assert "traefik" in lines[3]
+    assert "— Core Platform" in lines[3]
+    assert "🟢 Running (1)" in lines[3]
+    assert "traefik.example.test" in lines[3]
+    assert "✨ Found 2 workloads" not in rendered
+
+
+def test_cli_format_response_renders_workload_list_table_with_ssl():
+    """Ensure workload.list with SSL renders the canonical 6-column layout with CERT."""
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_list_ssl_01",
+        operation=OperationType.WORKLOAD_LIST,
+        result={
+            "total": 1,
+            "workloads": [
+                {
+                    "name": "snappymail",
+                    "type": "app",
+                    "domain": "mail.example.test",
+                    "deployment_status": "✓ Synced (main)",
+                    "provenance_status": "✓ Synced",
+                    "status": "🟢 Running (1)",
+                    "ssl": {"status": "🟢 80d remaining"},
+                },
+            ],
+            "message": "Found 1 workloads",
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    lines = rendered.splitlines()
+    assert len(lines) >= 3
+    assert lines[0] == "SERVICE          DEPLOYMENT             PROVENANCE             STATUS          DOMAIN                       CERT"
+    assert lines[1] == "-------          ----------             ----------             ------          ------                       ----"
+    assert "snappymail" in lines[2]
+    assert "🟢 80d remaining" in lines[2]
+
+
+def test_cli_format_response_renders_workload_list_table_with_manifest_error():
+    """Ensure workload.list renders ⚠️ Manifest Error and ⚠️ Invalid Manifest, and status=None renders as '-'."""
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_list_err",
+        operation=OperationType.WORKLOAD_LIST,
+        result={
+            "total": 1,
+            "workloads": [
+                {
+                    "name": "broken-app",
+                    "type": "app",
+                    "domain": "broken.example.test",
+                    "manifest_error": "Syntax error in app.yaml",
+                    "status": None,
+                },
+            ],
+            "message": "Found 1 workloads",
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    lines = rendered.splitlines()
+    assert len(lines) >= 3
+    assert "broken-app" in lines[2]
+    assert "⚠️ Manifest Error" in lines[2]
+    assert "⚠️ Invalid Manifest" in lines[2]
+    # Ensure status is '-' and NOT 'None'
+    assert " None " not in lines[2]
+    assert " - " in lines[2]
+
+
+def test_cli_format_response_renders_workload_get_info():
+    """Ensure workload.get (appctl info) renders structured workload metadata."""
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_get_01",
+        operation=OperationType.WORKLOAD_GET,
+        target="snappymail",
+        result={
+            "workload": {
+                "name": "snappymail",
+                "type": "app",
+                "dir_path": "/home/operator/Sites/snappymail",
+                "domain": "mail.example.test",
+                "description": "Lightweight Webmail",
+                "aliases": ["webmail", "mail"],
+                "networks": ["proxy-net"],
+                "auth": True,
+                "visible": True,
+            },
+            "message": "Retrieved metadata for snappymail",
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert "Workload Overview: snappymail" in rendered
+    assert "/home/operator/Sites/snappymail" in rendered
+    assert "mail.example.test" in rendered
+    assert "webmail, mail" in rendered
+    assert "✨ Retrieved metadata" not in rendered
+
+
+def test_cli_format_response_renders_empty_workload_list():
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_list_empty",
+        operation=OperationType.WORKLOAD_LIST,
+        result={"total": 0, "workloads": []},
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert rendered == "ℹ️  No workloads found."
+
+
+def test_cli_format_response_renders_core_service_and_rich_metadata():
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_get_core",
+        operation=OperationType.WORKLOAD_GET,
+        target="traefik",
+        result={
+            "workload": {
+                "name": "traefik",
+                "type": "core_service",
+                "dir_path": "/home/operator/Core",
+                "domain": "traefik.example.test",
+                "container": "traefik-proxy",
+                "description": "Edge Ingress",
+                "aliases": ["edge"],
+                "networks": ["proxy-net", "internal"],
+                "auth": False,
+                "visible": False,
+                "source": {
+                    "url": "https://git.example.com/repo.git",
+                    "ref": "main",
+                },
+                "manifest_error": "Syntax error in app.yaml",
+                "ssl": {
+                    "status": "valid",
+                    "issuer": "Let's Encrypt",
+                    "formatted_expiry": "2027-01-01",
+                },
+            },
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert "ℹ️  Core Infrastructure Service: traefik" in rendered
+    assert "Container:       traefik-proxy" in rendered
+    assert "Aliases:         edge" in rendered
+    assert "Networks:        proxy-net, internal" in rendered
+    assert "Auth Protected:  False" in rendered
+    assert "Dashboard:       Hidden" in rendered
+    assert "Source URL:      https://git.example.com/repo.git" in rendered
+    assert "Target Ref:      main" in rendered
+    assert "⚠️  Manifest Validation Error:" in rendered
+    assert "Syntax error in app.yaml" in rendered
+    assert "🔒 SSL/TLS Certificate:" in rendered
+    assert "Status:        valid" in rendered
+
+
+def test_cli_format_response_renders_ssl_info():
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_ssl_01",
+        operation=OperationType.PLATFORM_SSL,
+        result={
+            "ssl": {
+                "domain": "app.example.test",
+                "status": "valid",
+                "issuer": "Let's Encrypt Authority X3",
+                "subject": "CN=app.example.test",
+                "not_after": "2027-01-01 00:00:00 GMT",
+                "days_remaining": 75,
+                "formatted_expiry": "in 75 days",
+                "error": "Near expiration warning",
+            }
+        },
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert "🔒 SSL/TLS Certificate: app.example.test" in rendered
+    assert "Domain:          app.example.test" in rendered
+    assert "Status:          valid" in rendered
+    assert "Issuer:          Let's Encrypt Authority X3" in rendered
+    assert "Subject:         CN=app.example.test" in rendered
+    assert "Expiration:      2027-01-01 00:00:00 GMT" in rendered
+    assert "Days Remaining:  75 days (in 75 days)" in rendered
+    assert "Details/Error:   Near expiration warning" in rendered
+
+
+def test_cli_format_response_renders_workload_resolve_json():
+    import json
+    workload_data = {"name": "app1", "dir": "/sites/app1"}
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_resolve_01",
+        operation=OperationType.WORKLOAD_RESOLVE,
+        result={"workload": workload_data},
+        output="",
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert json.loads(rendered) == workload_data
+
+
+def test_cli_format_response_error_without_error_payload():
+    from unittest.mock import MagicMock
+    resp = MagicMock(spec=OperationResponse)
+    resp.success = False
+    resp.error = None
+    rendered = format_response(resp, raw_json=False)
+    assert rendered == "❌ Error: Unknown error"
+
+
+
+def test_cli_format_response_default_success_message():
+    resp = OperationResponse(
+        version="1.0",
+        success=True,
+        operation_id="op_succ",
+        operation=OperationType.PLATFORM_HEALTH,
+    )
+    rendered = format_response(resp, raw_json=False)
+    assert rendered == "✨ Operation 'platform.health' succeeded."
+
+
+
+def test_appctl_wrapper_fast_paths_completion_when_socket_exists(tmp_path: Path, monkeypatch):
+    """Ensure scripts/appctl executes `complete` and `completion` via appctl_engine.py even when socket exists."""
+    import os
+    import shutil
+    import socket as std_socket
+    import subprocess
+    import sys
+    import tempfile
+
+    bash_bin = shutil.which("bash") or "bash"
+    sock_dir = tempfile.TemporaryDirectory(prefix="appctl_sock_", dir="/tmp")
+    sock_path = Path(sock_dir.name) / "appctl.sock"
+    srv = std_socket.socket(std_socket.AF_UNIX, std_socket.SOCK_STREAM)
+    srv.bind(str(sock_path))
+    try:
+        appctl_script = Path(__file__).resolve().parent.parent.parent / "scripts" / "appctl"
+        env = {
+            "PATH": os.environ.get("PATH", "/run/current-system/sw/bin:/usr/bin:/bin"),
+            "PYTHON_BIN": sys.executable,
+            "HOMELAB_DOMAIN": "example.test",
+            "APPCTL_SOCKET_PATH": str(sock_path),
+            "SITES_DIR": str(tmp_path),
+        }
+        if "PYTHONPATH" in os.environ:
+            env["PYTHONPATH"] = os.environ["PYTHONPATH"]
+
+        res_comp = subprocess.run(
+            [bash_bin, str(appctl_script), "completion", "bash"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert res_comp.returncode == 0
+        assert "_appctl_completions()" in res_comp.stdout
+
+        res_words = subprocess.run(
+            [bash_bin, str(appctl_script), "complete", "services"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert res_words.returncode == 0
+        assert "traefik" in res_words.stdout
+        assert "core" in res_words.stdout
+    finally:
+        srv.close()
+        sock_dir.cleanup()
+
+
+def test_appctl_wrapper_fails_closed_when_socket_is_missing(tmp_path: Path):
+    """Ensure scripts/appctl fails closed with exit code 1 and diagnostic stderr when socket is missing."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    bash_bin = shutil.which("bash") or "bash"
+    non_existent_sock = tmp_path / "missing_appctl.sock"
+    appctl_script = Path(__file__).resolve().parent.parent.parent / "scripts" / "appctl"
+
+    env = {
+        "PATH": os.environ.get("PATH", "/run/current-system/sw/bin:/usr/bin:/bin"),
+        "PYTHON_BIN": sys.executable,
+        "HOMELAB_DOMAIN": "example.test",
+        "APPCTL_SOCKET_PATH": str(non_existent_sock),
+        "SITES_DIR": str(tmp_path),
+    }
+    if "PYTHONPATH" in os.environ:
+        env["PYTHONPATH"] = os.environ["PYTHONPATH"]
+
+    res = subprocess.run(
+        [bash_bin, str(appctl_script), "status"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res.returncode == 1
+    assert "daemon socket not found" in res.stderr
+
+
+def test_appctl_wrapper_fast_paths_completion_without_socket(tmp_path: Path):
+    """Ensure scripts/appctl completes offline via appctl_engine.py even when socket is missing."""
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    bash_bin = shutil.which("bash") or "bash"
+    non_existent_sock = tmp_path / "missing_appctl.sock"
+    appctl_script = Path(__file__).resolve().parent.parent.parent / "scripts" / "appctl"
+
+    env = {
+        "PATH": os.environ.get("PATH", "/run/current-system/sw/bin:/usr/bin:/bin"),
+        "PYTHON_BIN": sys.executable,
+        "HOMELAB_DOMAIN": "example.test",
+        "APPCTL_SOCKET_PATH": str(non_existent_sock),
+        "SITES_DIR": str(tmp_path),
+    }
+    if "PYTHONPATH" in os.environ:
+        env["PYTHONPATH"] = os.environ["PYTHONPATH"]
+
+    res_comp = subprocess.run(
+        [bash_bin, str(appctl_script), "completion", "bash"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_comp.returncode == 0
+    assert "_appctl_completions()" in res_comp.stdout
+    assert "up|deploy)" in res_comp.stdout
+    assert "--build --no-cache" in res_comp.stdout
+
+    res_words = subprocess.run(
+        [bash_bin, str(appctl_script), "complete", "services"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert res_words.returncode == 0
+    assert "traefik" in res_words.stdout
+    assert "core" in res_words.stdout
+
+

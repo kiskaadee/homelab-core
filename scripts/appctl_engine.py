@@ -33,7 +33,8 @@ from provenance import (
 
 # Dynamic Environment Paths
 CORE_DIR = os.environ.get(
-    "CORE_DIR", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "CORE_DIR",
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
 )
 
 SITES_DIR = os.environ.get(
@@ -75,15 +76,22 @@ ManifestError = ManifestValidationError
 
 @dataclass
 class App:
-    name: str                       # Canonical identifier (e.g., "traefik", "jellyfin")
-    description: str = ""           # Human-readable summary for dashboards and CLI info
-    domain: str = ""                # Routing FQDN (e.g., "auth.example.com") or "internal".
-    dir_path: str = ""              # Filesystem directory (CORE_DIR for Core, or ~/Sites/<app> for Sites).
+    name: str  # Canonical identifier (e.g., "traefik", "jellyfin")
+    description: str = ""  # Human-readable summary for dashboards and CLI info
+    domain: str = ""  # Routing FQDN (e.g., "auth.example.com") or "internal".
+    dir_path: str = (
+        ""  # Filesystem directory (CORE_DIR for Core, or ~/Sites/<app> for Sites).
+    )
 
     @property
     def is_internal(self) -> bool:
         """Returns True if the service does not expose a public TLS endpoint."""
-        return not self.domain or self.domain == "internal" or self.domain.endswith(".local") or ":" in self.domain
+        return (
+            not self.domain
+            or self.domain == "internal"
+            or self.domain.endswith(".local")
+            or ":" in self.domain
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for JSON consumption by scripts/appctl"""
@@ -94,26 +102,34 @@ class App:
 
 @dataclass
 class CoreService(App):
-    container: str = ""             # Target container name inside Core's docker-compose.yml
-    weight: int = 50                # Homepage ordering weight
-    icon: str = "default.png"       # Dashboard icon filename
+    container: str = ""  # Target container name inside Core's docker-compose.yml
+    weight: int = 50  # Homepage ordering weight
+    icon: str = "default.png"  # Dashboard icon filename
     app_type: str = "core_service"
     dir_path: str = CORE_DIR
+
+    @property
+    def container_name(self) -> str:
+        return self.container
 
 
 @dataclass
 class SitesApp(App):
-    dir_name: str = ""              # directory name in ~/Sites (e.g., "homelab-vaultwarden")
-    source: SourceConfig | None = None  # Upstream source provenance (None = Class B Image-Only)
-    aliases: list[str] = field(default_factory=list)    # CLI resolution aliases
-    visible: bool = True            # Defines whether the icon is visible in Homepage
-    auth: bool = True               # Authelia protection guard indicator
-    has_compose: bool = False       # Whether a docker-compose.yml exists
-    networks: list[str] = field(default_factory=lambda: ["proxy-net"])  # Docker network attachments
-    env: dict[str, Any] = field(default_factory=dict)   # Environment variable overrides
-    homepage: HomepageConfig | None = None              # Dashboard Card Configuration
-    manifest_error: str | None = None                   # Captured syntax/loading errors
-    manifest_obj: Manifest | None = None                # Parsed authoritative Manifest
+    dir_name: str = ""  # directory name in ~/Sites (e.g., "homelab-vaultwarden")
+    source: SourceConfig | None = (
+        None  # Upstream source provenance (None = Class B Image-Only)
+    )
+    aliases: list[str] = field(default_factory=list)  # CLI resolution aliases
+    visible: bool = True  # Defines whether the icon is visible in Homepage
+    auth: bool = True  # Authelia protection guard indicator
+    has_compose: bool = False  # Whether a docker-compose.yml exists
+    networks: list[str] = field(
+        default_factory=lambda: ["proxy-net"]
+    )  # Docker network attachments
+    env: dict[str, Any] = field(default_factory=dict)  # Environment variable overrides
+    homepage: HomepageConfig | None = None  # Dashboard Card Configuration
+    manifest_error: str | None = None  # Captured syntax/loading errors
+    manifest_obj: Manifest | None = None  # Parsed authoritative Manifest
     app_type: str = "app"
 
     def to_dict(self) -> dict[str, Any]:
@@ -121,13 +137,19 @@ class SitesApp(App):
         data = asdict(self)
         data.pop("manifest_obj", None)
         if self.source is not None:
-            data["source"] = self.source.to_dict() if hasattr(self.source, "to_dict") else self.source.model_dump()
+            data["source"] = (
+                self.source.to_dict()
+                if hasattr(self.source, "to_dict")
+                else self.source.model_dump()
+            )
         if self.homepage is not None:
-            data["homepage"] = self.homepage.to_dict() if hasattr(self.homepage, "to_dict") else self.homepage.model_dump()
+            data["homepage"] = (
+                self.homepage.to_dict()
+                if hasattr(self.homepage, "to_dict")
+                else self.homepage.model_dump()
+            )
         data["type"] = getattr(self, "app_type", "app")
         return data
-
-
 
 
 def sites_app_from_manifest(
@@ -139,10 +161,9 @@ def sites_app_from_manifest(
     raw_dir_name = os.path.basename(app_dir)
 
     if isinstance(manifest, Manifest):
-        has_compose = (
-            os.path.isfile(os.path.join(app_dir, "docker-compose.yaml")) or
-            os.path.isfile(os.path.join(app_dir, "docker-compose.yml"))
-        )
+        has_compose = os.path.isfile(
+            os.path.join(app_dir, "docker-compose.yaml")
+        ) or os.path.isfile(os.path.join(app_dir, "docker-compose.yml"))
         canonical_name = manifest.name
         domain = manifest.domain or f"{canonical_name}.{HOMELAB_DOMAIN}"
         return SitesApp(
@@ -169,7 +190,9 @@ def sites_app_from_manifest(
             return sites_app_from_manifest(app_dir, parsed, manifest_error)
         except ManifestValidationError as err:
             manifest_error = f"{manifest_error}; {err}" if manifest_error else str(err)
-            canonical_name = str(manifest.get("name") or raw_dir_name.replace("homelab-", ""))
+            canonical_name = str(
+                manifest.get("name") or raw_dir_name.replace("homelab-", "")
+            )
             return SitesApp(
                 name=canonical_name,
                 dir_name=raw_dir_name,
@@ -217,13 +240,18 @@ def get_sites_apps(sites_dir: str | None = None) -> list[SitesApp]:
         try:
             manifest_obj = parse_manifest(manifest_file)
             apps.append(sites_app_from_manifest(app_dir=app_dir, manifest=manifest_obj))
-        except (ManifestValidationError, yaml.YAMLError, OSError, ValueError, KeyError) as err:
+        except (
+            ManifestValidationError,
+            yaml.YAMLError,
+            OSError,
+            ValueError,
+            KeyError,
+        ) as err:
             raw_data = None
-            with (
-                contextlib.suppress(Exception),
-                open(manifest_path, "r", encoding="utf-8") as f,
-            ):
+            with contextlib.suppress(Exception), open(manifest_path, "r", encoding="utf-8") as f:
                 raw_data = yaml.safe_load(f)
+
+
             app_dict = raw_data if isinstance(raw_data, dict) else {}
             apps.append(
                 sites_app_from_manifest(
@@ -322,14 +350,18 @@ def resolve_app(
     query: str,
     apps: list[SitesApp] | None = None,
     sites_dir: str | None = None,
+    core_dir: str | None = None,
 ) -> App | None:
     """
     Resolve a query string to a SitesApp or CoreService.
     Priority: Canonical Name > Alias > Dir Name > Stripped 'homelab-' Prefix > Core Services.
     """
     if apps is None:
-        apps = get_sites_apps(sites_dir=sites_dir if sites_dir is not None else SITES_DIR)
+        apps = get_sites_apps(
+            sites_dir=sites_dir if sites_dir is not None else SITES_DIR
+        )
 
+    c_dir = core_dir if core_dir is not None else CORE_DIR
     query_clean = query.strip().lower()
 
     # 1. Exact match on canonical name
@@ -353,7 +385,7 @@ def resolve_app(
             return app
 
     # 5. Match Core services
-    for svc in get_core_services():
+    for svc in get_core_services(core_dir=c_dir):
         if svc.name.lower() == query_clean:
             return svc
 
@@ -363,7 +395,7 @@ def resolve_app(
             domain=HOMELAB_DOMAIN,
             container="",
             description="Homelab Core Platform Stack",
-            dir_path=CORE_DIR,
+            dir_path=c_dir,
             app_type="core",
         )
 
@@ -383,13 +415,22 @@ def get_docker_status(
                 text=True,
                 check=False,
             )
+            if inspect_res.returncode != 0:
+                err = (inspect_res.stderr or "").lower()
+                if "no such object" in err or "no such container" in err:
+                    return "🔴 Stopped"
+                return "❓ Unknown"
             state = inspect_res.stdout.strip()
             if state.lower() == "true":
                 return "🟢 Running (1)"
             return "🔴 Stopped"
 
         path = Path(dir_path)
-        if path.exists() and not (path / "docker-compose.yml").is_file() and not (path / "docker-compose.yaml").is_file():
+        if (
+            path.exists()
+            and not (path / "docker-compose.yml").is_file()
+            and not (path / "docker-compose.yaml").is_file()
+        ):
             return "⚪ Not Stack"
 
         res = subprocess.run(
@@ -399,6 +440,9 @@ def get_docker_status(
             text=True,
             check=False,
         )
+        if res.returncode != 0:
+            return "❓ Unknown"
+
         container_ids = [c for c in res.stdout.strip().splitlines() if c]
         if not container_ids:
             return "🔴 Stopped"
@@ -409,6 +453,9 @@ def get_docker_status(
             text=True,
             check=False,
         )
+        if inspect_res.returncode != 0:
+            return "❓ Unknown"
+
         running_states = inspect_res.stdout.strip().splitlines()
         running_count = sum(1 for s in running_states if s.lower() == "true")
         total_count = len(container_ids)
@@ -465,7 +512,9 @@ def get_docker_image_revision(
         return None
 
 
-def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[str, Any]:
+def check_ssl_cert(
+    domain: str, port: int = 443, timeout: float = 3.0
+) -> dict[str, Any]:
     """Inspect SSL/TLS certificate for a domain using standard library ssl and socket."""
     if not domain or domain == "internal" or domain.endswith(".local") or ":" in domain:
         return {
@@ -481,20 +530,18 @@ def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[s
 
     try:
         ctx = ssl.create_default_context()
-        with (
-            socket.create_connection((domain, port), timeout=timeout) as sock,
-            ctx.wrap_socket(sock, server_hostname=domain) as ssock,
-        ):
-            raw_cert = ssock.getpeercert()
-            cert = raw_cert if isinstance(raw_cert, dict) else {}
+        with socket.create_connection((domain, port), timeout=timeout) as sock:  # noqa: SIM117
+            with ctx.wrap_socket(sock, server_hostname=domain) as ssock:
+                raw_cert = ssock.getpeercert()
+                cert = raw_cert if isinstance(raw_cert, dict) else {}
 
         not_after_str = str(cert.get("notAfter", ""))
         days_remaining = None
         formatted_expiry = "-"
         if not_after_str:
-            expiry_dt = datetime.datetime.strptime(not_after_str, "%b %d %H:%M:%S %Y %Z").replace(
-                tzinfo=datetime.UTC
-            )
+            expiry_dt = datetime.datetime.strptime(
+                not_after_str, "%b %d %H:%M:%S %Y %Z"
+            ).replace(tzinfo=datetime.UTC)
             now_dt = datetime.datetime.now(datetime.UTC)
             days_remaining = (expiry_dt - now_dt).days
             formatted_expiry = expiry_dt.strftime("%Y-%m-%d")
@@ -507,7 +554,11 @@ def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[s
                     entry = rdn[0]
                     if isinstance(entry, (list, tuple)) and len(entry) >= 2:
                         issuer_dict[str(entry[0])] = str(entry[1])
-        issuer = str(issuer_dict.get("organizationName") or issuer_dict.get("commonName") or "Unknown")
+        issuer = str(
+            issuer_dict.get("organizationName")
+            or issuer_dict.get("commonName")
+            or "Unknown"
+        )
 
         subject_dict: dict[str, str] = {}
         subject_raw = cert.get("subject")
@@ -518,7 +569,6 @@ def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[s
                     if isinstance(entry, (list, tuple)) and len(entry) >= 2:
                         subject_dict[str(entry[0])] = str(entry[1])
         subject = str(subject_dict.get("commonName") or domain)
-
 
         if days_remaining is not None:
             if days_remaining < 0:
@@ -540,7 +590,14 @@ def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[s
             "formatted_expiry": formatted_expiry,
             "error": None,
         }
-    except (ssl.SSLError, socket.gaierror, TimeoutError, ConnectionRefusedError, OSError, ValueError) as e:
+    except (
+        ssl.SSLError,
+        socket.gaierror,
+        TimeoutError,
+        ConnectionRefusedError,
+        OSError,
+        ValueError,
+    ) as e:
         return {
             "domain": domain,
             "status": "🔴 Failed",
@@ -555,13 +612,19 @@ def check_ssl_cert(domain: str, port: int = 443, timeout: float = 3.0) -> dict[s
 
 def check_all_ssl_certs(domains: list[str]) -> dict[str, dict[str, Any]]:
     """Check multiple domains concurrently with ThreadPoolExecutor."""
-    valid_domains = [d for d in set(domains) if d and d != "internal" and not d.endswith(".local") and ":" not in d]
+    valid_domains = [
+        d
+        for d in set(domains)
+        if d and d != "internal" and not d.endswith(".local") and ":" not in d
+    ]
     results: dict[str, dict[str, Any]] = {}
     if not valid_domains:
         return results
 
     with ThreadPoolExecutor(max_workers=min(len(valid_domains), 8)) as executor:
-        future_to_domain = {executor.submit(check_ssl_cert, d): d for d in valid_domains}
+        future_to_domain = {
+            executor.submit(check_ssl_cert, d): d for d in valid_domains
+        }
         for future, d in future_to_domain.items():
             with contextlib.suppress(subprocess.SubprocessError, OSError):
                 results[d] = future.result()
@@ -591,15 +654,17 @@ def cmd_sync_homepage(args: list[str] | None = None) -> None:
         groups[core_group] = []
         for svc in core_services:
             if not svc.is_internal:
-                groups[core_group].append({
-                    "title": svc.name.title(),
-                    "icon": getattr(svc, "icon", "default.png"),
-                    "href": f"https://{svc.domain}",
-                    "description": svc.description,
-                    "server": "my-docker",
-                    "container": getattr(svc, "container", svc.name),
-                    "weight": getattr(svc, "weight", 50),
-                })
+                groups[core_group].append(
+                    {
+                        "title": svc.name.title(),
+                        "icon": getattr(svc, "icon", "default.png"),
+                        "href": f"https://{svc.domain}",
+                        "description": svc.description,
+                        "server": "my-docker",
+                        "container": getattr(svc, "container", svc.name),
+                        "weight": getattr(svc, "weight", 50),
+                    }
+                )
 
     # 2. Add Sites applications
     icons_dir = os.path.join(hp_dir, "icons")
@@ -633,15 +698,17 @@ def cmd_sync_homepage(args: list[str] | None = None) -> None:
         if matched_icon:
             icon = f"/icons/{matched_icon}"
 
-        groups[group_name].append({
-            "title": card_title,
-            "icon": icon,
-            "href": f"https://{app.domain}",
-            "description": desc,
-            "server": "my-docker",
-            "container": container,
-            "weight": weight,
-        })
+        groups[group_name].append(
+            {
+                "title": card_title,
+                "icon": icon,
+                "href": f"https://{app.domain}",
+                "description": desc,
+                "server": "my-docker",
+                "container": container,
+                "weight": weight,
+            }
+        )
 
     # Preferred group order
     preferred_order = [
@@ -675,10 +742,16 @@ def cmd_sync_homepage(args: list[str] | None = None) -> None:
         lines.append("")
 
     content = "\n".join(lines).strip() + "\n"
-    with open(services_yaml_path, "w", encoding="utf-8") as f:
+    tmp_services_path = services_yaml_path + ".tmp"
+    with open(tmp_services_path, "w", encoding="utf-8") as f:
         f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_services_path, services_yaml_path)
 
-    print(f"✨ Homepage synchronized successfully ({len(visible_apps)} visible apps in {len(sorted_groups)} groups)")
+    print(
+        f"✨ Homepage synchronized successfully ({len(visible_apps)} visible apps in {len(sorted_groups)} groups)"
+    )
     print(f"📄 Generated {services_yaml_path}")
 
 
@@ -699,11 +772,19 @@ def cmd_list(args: list[str]) -> None:
         ssl_data = check_all_ssl_certs(domains_to_check)
 
     if show_ssl:
-        print(f"{'SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<22} {'STATUS':<15} {'DOMAIN':<28} {'CERT'}")
-        print(f"{'-------':<16} {'----------':<22} {'----------':<22} {'------':<15} {'------':<28} {'----'}")
+        print(
+            f"{'SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<22} {'STATUS':<15} {'DOMAIN':<28} {'CERT'}"
+        )
+        print(
+            f"{'-------':<16} {'----------':<22} {'----------':<22} {'------':<15} {'------':<28} {'----'}"
+        )
     else:
-        print(f"{'SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<24} {'STATUS':<15} {'DOMAIN':<28}")
-        print(f"{'-------':<16} {'----------':<22} {'----------':<24} {'------':<15} {'------':<28}")
+        print(
+            f"{'SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<24} {'STATUS':<15} {'DOMAIN':<28}"
+        )
+        print(
+            f"{'-------':<16} {'----------':<22} {'----------':<24} {'------':<15} {'------':<28}"
+        )
 
     for app in apps:
         app_path = Path(app.dir_path)
@@ -713,7 +794,9 @@ def cmd_list(args: list[str]) -> None:
             dep_str = "⚠️ Manifest Error"
             prov_str = "⚠️ Invalid Manifest"
         else:
-            manifest_obj = app.manifest_obj or Manifest(name=app.name, domain=app.domain)
+            manifest_obj = app.manifest_obj or Manifest(
+                name=app.name, domain=app.domain
+            )
             two_axis = inspect_workload_two_axis(
                 app_dir=app_path,
                 manifest=manifest_obj,
@@ -726,9 +809,13 @@ def cmd_list(args: list[str]) -> None:
         if show_ssl:
             cert_info = ssl_data.get(app.domain, check_ssl_cert(app.domain))
             cert_badge = cert_info.get("status", "-")
-            print(f"{app.name:<16} {dep_str:<22} {prov_str:<22} {docker_status:<15} {app.domain:<28} {cert_badge}")
+            print(
+                f"{app.name:<16} {dep_str:<22} {prov_str:<22} {docker_status:<15} {app.domain:<28} {cert_badge}"
+            )
         else:
-            print(f"{app.name:<16} {dep_str:<22} {prov_str:<24} {docker_status:<15} {app.domain:<28}")
+            print(
+                f"{app.name:<16} {dep_str:<22} {prov_str:<24} {docker_status:<15} {app.domain:<28}"
+            )
 
     if show_core:
         core_path = Path(CORE_DIR)
@@ -736,11 +823,19 @@ def cmd_list(args: list[str]) -> None:
         core_dep_str = core_checkout.status_label
         print()
         if show_ssl:
-            print(f"{'CORE SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<22} {'STATUS':<15} {'DOMAIN':<28} {'CERT'}")
-            print(f"{'------------':<16} {'----------':<22} {'----------':<22} {'------':<15} {'------':<28} {'----'}")
+            print(
+                f"{'CORE SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<22} {'STATUS':<15} {'DOMAIN':<28} {'CERT'}"
+            )
+            print(
+                f"{'------------':<16} {'----------':<22} {'----------':<22} {'------':<15} {'------':<28} {'----'}"
+            )
         else:
-            print(f"{'CORE SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<24} {'STATUS':<15} {'DOMAIN':<28}")
-            print(f"{'------------':<16} {'----------':<22} {'----------':<24} {'------':<15} {'------':<28}")
+            print(
+                f"{'CORE SERVICE':<16} {'DEPLOYMENT':<22} {'PROVENANCE':<24} {'STATUS':<15} {'DOMAIN':<28}"
+            )
+            print(
+                f"{'------------':<16} {'----------':<22} {'----------':<24} {'------':<15} {'------':<28}"
+            )
 
         core_services = get_core_services()
         for i, svc in enumerate(core_services):
@@ -749,9 +844,13 @@ def cmd_list(args: list[str]) -> None:
             if show_ssl:
                 cert_info = ssl_data.get(svc.domain, check_ssl_cert(svc.domain))
                 cert_badge = cert_info.get("status", "-")
-                print(f"{svc.name:<16} {row_dep:<22} {'— Core Platform':<22} {svc_docker:<15} {svc.domain:<28} {cert_badge}")
+                print(
+                    f"{svc.name:<16} {row_dep:<22} {'— Core Platform':<22} {svc_docker:<15} {svc.domain:<28} {cert_badge}"
+                )
             else:
-                print(f"{svc.name:<16} {row_dep:<22} {'— Core Platform':<24} {svc_docker:<15} {svc.domain:<28}")
+                print(
+                    f"{svc.name:<16} {row_dep:<22} {'— Core Platform':<24} {svc_docker:<15} {svc.domain:<28}"
+                )
 
 
 def cmd_info(args: list[str]) -> None:
@@ -775,7 +874,9 @@ def cmd_info(args: list[str]) -> None:
         print(f"Directory:       {app.dir_path}")
         print(f"Domain:          {app.domain}")
         print(f"Container:       {app.container}")
-        print(f"Status:          {get_docker_status(Path(app.dir_path), app.container)}")
+        print(
+            f"Status:          {get_docker_status(Path(app.dir_path), app.container)}"
+        )
         print(f"Description:     {app.description}")
         return
 
@@ -791,7 +892,9 @@ def cmd_info(args: list[str]) -> None:
     print(f"Description:     {app.description}")
     if app.aliases:
         print(f"Aliases:         {', '.join(app.aliases)}")
-    print(f"Class:           {'Class A (Source-Backed)' if app.source else 'Class B (Image-Only)'}")
+    print(
+        f"Class:           {'Class A (Source-Backed)' if app.source else 'Class B (Image-Only)'}"
+    )
     print(f"Networks:        {', '.join(app.networks)}")
     print(f"Auth Protected:  {app.auth}")
     print(f"Dashboard:       {'Visible' if app.visible else 'Hidden'}")
@@ -816,7 +919,9 @@ def cmd_info(args: list[str]) -> None:
     if two_axis.checkout.is_git:
         print(f"  Branch:        {two_axis.checkout.branch}")
         print(f"  Commit SHA:    {two_axis.checkout.commit_sha}")
-        print(f"  Checkout:      {'* Dirty (Uncommitted changes)' if two_axis.checkout.is_dirty else '✓ Clean'}")
+        print(
+            f"  Checkout:      {'* Dirty (Uncommitted changes)' if two_axis.checkout.is_dirty else '✓ Clean'}"
+        )
     print(f"  Docker Status: {two_axis.docker_status}")
     if two_axis.image_revision:
         print(f"  Image Revision:{two_axis.image_revision}")
@@ -847,7 +952,10 @@ def cmd_resolve(args: list[str]) -> None:
     if not app:
         sys.exit(1)
     if isinstance(app, SitesApp) and app.manifest_error:
-        print(f"❌ Error: Workload '{app.name}' has invalid manifest: {app.manifest_error}", file=sys.stderr)
+        print(
+            f"❌ Error: Workload '{app.name}' has invalid manifest: {app.manifest_error}",
+            file=sys.stderr,
+        )
         sys.exit(1)
     print(json.dumps(app.to_dict()))
 
@@ -874,7 +982,9 @@ def cmd_ssl(args: list[str]) -> None:
             print(f"Subject:         {cert_info['subject']}")
             print(f"Expiration:      {cert_info['not_after']}")
             if cert_info["days_remaining"] is not None:
-                print(f"Days Remaining:  {cert_info['days_remaining']} days ({cert_info['formatted_expiry']})")
+                print(
+                    f"Days Remaining:  {cert_info['days_remaining']} days ({cert_info['formatted_expiry']})"
+                )
             if cert_info["error"]:
                 print(f"Details/Error:   {cert_info['error']}")
             print()
@@ -896,7 +1006,9 @@ def cmd_ssl(args: list[str]) -> None:
 
     for name, domain in services_to_check:
         info = ssl_results.get(domain, check_ssl_cert(domain))
-        print(f"{name:<20} {domain:<30} {info['status']:<24} {info['issuer']:<20} {info['formatted_expiry']}")
+        print(
+            f"{name:<20} {domain:<30} {info['status']:<24} {info['issuer']:<20} {info['formatted_expiry']}"
+        )
 
 
 def cmd_complete(args: list[str]) -> None:

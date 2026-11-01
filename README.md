@@ -9,7 +9,7 @@ It is designed around a strict two-tier boundary:
 All platform definitions are strictly instance-agnostic; domain names (`HOMELAB_DOMAIN`) and secrets (`/run/secrets/`) are injected declaratively at runtime.
 
 > [!NOTE]
-> **Current Implementation Baseline vs. Target Architecture**: This README documents the **currently implemented CLI and runtime baseline (Milestone P3)**. Under [Milestone P4 in `ROADMAP.md`](ROADMAP.md), `appctl` is transitioning from a host CLI orchestrator into a dedicated daemon service (`homelab-appctl.service`) exposing a unified logical API across local Unix socket and HTTP transports. See [`ROADMAP.md`](ROADMAP.md) for the full baseline-to-target matrix.
+> **Milestone P4 Control Plane Architecture**: Under [Milestone P4 in `ROADMAP.md`](ROADMAP.md), `appctl` operates as an operational control plane daemon service (`homelab-appctl.service`) exposing a unified logical API across a local Unix Domain Socket (`/run/homelab/appctl.sock`) and loopback HTTP (`127.0.0.1:9876`). The thin `appctl` CLI delegates commands to this daemon with automatic `SO_PEERCRED` identity inspection and token-based RBAC. See [`docs/appctl.md`](docs/appctl.md) and [`ROADMAP.md`](ROADMAP.md) for details.
 
 ---
 
@@ -49,8 +49,10 @@ All platform definitions are strictly instance-agnostic; domain names (`HOMELAB_
                                     ▲
                                     │ (Host Orchestration & CD)
                     ┌───────────────┴───────────────┐
-                    │  Host Control Plane Baseline  │
-                    │  • appctl CLI + Engine        │
+                    │  Host Control Plane (P4)      │
+                    │  • thin appctl CLI            │
+                    │  • homelab-appctl.service     │
+                    │    (UDS / HTTP daemon)        │
                     │  • homelab-gitops.service     │
                     └───────────────────────────────┘
 ```
@@ -82,10 +84,17 @@ For detailed runtime layers, network segmentation, and the P4 control-plane tran
 ├── nixos/                     # Declarative NixOS modules, systemd units, and SOPS secret wiring
 ├── config/                    # Service configurations (Traefik, Authelia, Homepage, deployments.yaml)
 ├── scripts/
-│   ├── appctl                 # Operational CLI entrypoint and Compose environment orchestrator
-│   ├── appctl_engine.py       # Discovery, two-axis provenance, TLS inspection, and Homepage sync engine
-│   ├── core_manifest.py       # Authoritative Pydantic v2 schema v1.0 parser for workload app.yaml
-│   ├── gitops_dispatcher.py   # Authenticated webhook CD engine with Compose AST security validation
+│   ├── appctl                 # Thin operational CLI delegating to control plane daemon
+│   ├── appctl_daemon.py       # Async HTTP/UDS daemon server (homelab-appctl.service)
+│   ├── appctl_router.py       # Operational router, locking, RBAC & dispatch
+│   ├── appctl_auth.py         # SO_PEERCRED & Bearer token RBAC authentication
+│   ├── appctl_audit.py        # Append-only fail-closed structured audit logger
+│   ├── appctl_contracts.py   # Pydantic v2 schemas for daemon RPC requests & responses
+│   ├── appctl_cli.py          # Unified CLI client with dual transport fallbacks
+│   ├── appctl_engine.py       # Discovery, two-axis provenance, TLS inspection, and Homepage sync
+│   ├── bootstrap_token.py     # Operator Bearer token provisioning helper
+│   ├── core_manifest.py       # Authoritative Pydantic v2 schema v1.0 parser for app.yaml
+│   ├── gitops_dispatcher.py   # Authenticated webhook CD engine with Compose AST validation
 │   └── test                   # Automated verification gate (Ruff, Pyright, Pytest, Nix flake checks)
 ├── tests/                     # Unit, structural, and security invariant test suites
 └── docs/                      # Architecture references, operational runbooks, and MADR decisions
@@ -93,7 +102,7 @@ For detailed runtime layers, network segmentation, and the P4 control-plane tran
 
 ---
 
-## Quickstart & Operations (Current CLI Baseline)
+## Quickstart & Operations (Control Plane Daemon & CLI)
 
 ### Development & Verification
 
@@ -111,7 +120,12 @@ pyright
 
 ### Workload Management (`appctl` CLI)
 
+The thin `appctl` CLI connects directly to `homelab-appctl.service` via Unix Domain Socket (`/run/homelab/appctl.sock`) or loopback HTTP (`127.0.0.1:9876`). Local operators in `homelab-operators` or `wheel` receive read-only viewer access via kernel `SO_PEERCRED` without tokens, while mutating actions consume Bearer tokens from `~/.config/homelab/token`:
+
 ```bash
+# Check daemon health status
+appctl health
+
 # List all workloads with container health and local Git checkout status
 appctl list
 
@@ -121,7 +135,7 @@ appctl list --fetch --ssl --core
 # Inspect detailed manifest, provenance, and container diagnostics for a workload
 appctl info <service>
 
-# Manage workload or Core service lifecycle (executes docker compose locally in the current baseline)
+# Manage workload or Core service lifecycle (dispatched via homelab-appctl daemon)
 appctl up <service|core>
 appctl down <service|core>
 appctl restart <service|core>
@@ -136,11 +150,12 @@ appctl sync
 ### Host System Management
 
 ```bash
-# Rebuild and activate the NixOS host configuration
-sudo nixos-rebuild switch --flake .#server
+# Rebuild and activate the NixOS host configuration (or use the 'nix-switch' alias)
+sudo nixos-rebuild switch --flake path:$HOME/Core#server --impure
 
 # Inspect platform systemd units
 systemctl status homeserver-core.service
+systemctl status homelab-appctl.service
 systemctl status homelab-gitops.service
 systemctl status dynu-monitor.service
 ```

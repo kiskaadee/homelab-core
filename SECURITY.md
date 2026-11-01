@@ -31,6 +31,15 @@ This document outlines the security controls, container isolation rules, and ope
 * Secrets are stored encrypted in `nixos/secrets.yaml` using Age keys derived from the host SSH key (`/etc/ssh/ssh_host_ed25519_key`).
 * Decrypted secrets reside in RAM-backed ephemeral filesystems (`/run/secrets/`, `/run/credentials/`) and are not committed to unencrypted persistent files.
 
+### F. Operational Control Plane Security (`homelab-appctl.service`)
+* **Transport Isolation**: Daemon listens on a restricted Unix Domain Socket (`/run/homelab/appctl.sock`, mode `0660`, group `homelab-operators`) and loopback HTTP (`127.0.0.1:9876`). It never binds to public interfaces.
+* **Authentication & RBAC**:
+  - **UDS Peer Credential Identification**: Local connections inspect kernel peer credentials (`SO_PEERCRED`). Callers in `homelab-operators` or `wheel` receive read-only viewer privileges automatically without requiring secrets on disk.
+  - **Cryptographic Bearer Tokens**: Mutating actions require Bearer tokens defined in SOPS (`/run/secrets/appctl/tokens.json`). Tokens are validated using `hmac.compare_digest` against SHA-256 digests.
+  - **Three-Tier RBAC**: Granular role enforcement distinguishes read-only inspectors (`viewer`), workload managers (`operator`), and core platform administrators (`admin`).
+* **Per-Target Concurrency Control (`flock`)**: Non-blocking file locks (`/run/lock/homelab/<target>.lock`) serialize mutating actions per workload, returning HTTP 409 Conflict if an operation is already in flight.
+* **Fail-Closed Structured Audit Logging**: Every operational command is appended synchronously to a tamper-evident audit log (`/var/log/homelab/appctl/audit.jsonl`, mode `0600`). If disk writing fails, the daemon fails closed and rejects the request.
+
 ---
 
 ## 2. Threat Model & Operational Considerations
@@ -57,3 +66,6 @@ This document outlines the security controls, container isolation rules, and ope
 - [x] Invariant test runner (`./scripts/test`) passing on changes.
 - [x] `config/letsencrypt/acme.json` permissions set to `0600`.
 - [x] Host firewall ports restricted to declared services in `nixos/modules/homeserver.nix`.
+- [x] Control plane daemon (`homelab-appctl.service`) isolated to UDS (`0660`) and loopback HTTP.
+- [x] Operational audit log (`/var/log/homelab/appctl/audit.jsonl`) append-only with strict `0600` permissions.
+- [x] Control plane mutation endpoints enforce per-target `flock` and SHA-256 Bearer tokens.
