@@ -18,9 +18,12 @@ Asserts:
 
 from __future__ import annotations
 
+import concurrent.futures
 import hashlib
 import json
 import socket
+import threading
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -433,6 +436,55 @@ def test_concurrent_mutation_conflict(daemon_env):
         assert resp.error is not None
         assert resp.error.code == ErrorCode.ERR_CONCURRENT_MUTATION
         assert resp.error.code.http_status == 409
+
+
+def test_daemon_multi_threaded_lock_contention_rejects_concurrent_mutation(daemon_env):
+    """
+    Simultaneous mutating requests for the same target result in one 200 SUCCESS
+    and one 409 ERR_CONCURRENT_MUTATION via multi-threaded lock contention.
+    """
+    deploy_req = OperationRequest(operation=OperationType.WORKLOAD_DEPLOY, target="docs")
+    first_started = threading.Event()
+
+    def slow_subproc(cmd, *args, **kwargs):
+        first_started.set()
+        time.sleep(0.2)
+        return (0, "Started", "")
+
+    def send_first():
+        return send_daemon_request(
+            endpoint=daemon_env.socket_path,
+            operation_request=deploy_req,
+            token=ADMIN_SECRET,
+        )
+
+    def send_second():
+        first_started.wait(timeout=2.0)
+        return send_daemon_request(
+            endpoint=daemon_env.socket_path,
+            operation_request=deploy_req,
+            token=ADMIN_SECRET,
+        )
+
+    with (
+        patch("appctl_router.run_bounded_subprocess", side_effect=slow_subproc),
+        patch("appctl_router.OperationalRouter._trigger_homepage_sync"),
+        concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor,
+    ):
+        fut1 = executor.submit(send_first)
+        fut2 = executor.submit(send_second)
+        resp1 = fut1.result(timeout=5.0)
+        resp2 = fut2.result(timeout=5.0)
+
+    responses = [resp1, resp2]
+    successes = [r for r in responses if r.success]
+    conflicts = [r for r in responses if not r.success and r.error and r.error.code == ErrorCode.ERR_CONCURRENT_MUTATION]
+
+    assert len(successes) == 1
+    assert len(conflicts) == 1
+    assert successes[0].result is not None
+    assert successes[0].result["action"] == "deployed"
+    assert conflicts[0].error.code.http_status == 409
 
 
 def test_execution_failure_audit(daemon_env):
