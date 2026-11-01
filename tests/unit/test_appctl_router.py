@@ -1336,6 +1336,108 @@ def test_operational_router_workload_config_redacts_evaluated_secrets_for_operat
         assert "supersecretpassword123" in resp_admin.result["output"]
 
 
+@pytest.mark.parametrize(
+    ("exit_code", "stderr_msg"),
+    [
+        (1, "Error: container failed to start: port in use"),
+        (2, "Error response from daemon: network homelab_edge not found"),
+    ],
+)
+def test_operational_router_workload_deploy_propagates_non_zero_exit_and_stderr(
+    tmp_path: Path,
+    admin_principal: Principal,
+    mock_workload_dir: Path,
+    exit_code: int,
+    stderr_msg: str,
+):
+    audit_file = tmp_path / "audit.jsonl"
+    router = OperationalRouter(
+        audit_logger=AuditLogger(audit_file),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_workload_dir.parent,
+    )
+    req = OperationRequest.model_validate({
+        "operation": "workload.deploy",
+        "target": "snappymail",
+    })
+
+    mock_app = MagicMock()
+    mock_app.name = "snappymail"
+    mock_app.dir_path = str(mock_workload_dir)
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.run_bounded_subprocess", return_value=(exit_code, "", stderr_msg)),
+        patch("appctl_router.cmd_sync_homepage"),
+    ):
+        resp = router.dispatch(req, admin_principal)
+
+    assert resp.success is False
+    assert resp.error is not None
+    assert resp.error.code == ErrorCode.ERR_EXECUTION_FAILED
+    assert stderr_msg in resp.error.message
+
+    audit_lines = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    failed_events = [ev for ev in audit_lines if ev.get("phase") == "FAILED"]
+    assert len(failed_events) >= 1
+    failed_event = failed_events[-1]
+    assert failed_event["target"] == "snappymail"
+    assert failed_event["result"]["exit_code"] == exit_code
+    assert failed_event["result"]["error_code"] == ErrorCode.ERR_EXECUTION_FAILED.value
+    assert stderr_msg in failed_event["result"]["message"]
+
+
+def test_operational_router_workload_update_propagates_non_zero_exit_and_stderr(
+    tmp_path: Path,
+    operator_principal: Principal,
+    mock_workload_dir: Path,
+):
+    audit_file = tmp_path / "audit.jsonl"
+    router = OperationalRouter(
+        audit_logger=AuditLogger(audit_file),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_workload_dir.parent,
+    )
+    req = OperationRequest.model_validate({
+        "operation": "workload.update",
+        "target": "snappymail",
+        "parameters": {"expected_branch": "main"},
+    })
+
+    mock_app = MagicMock()
+    mock_app.name = "snappymail"
+    mock_app.dir_path = str(mock_workload_dir)
+
+    def mock_subproc(cmd: list[str], **kwargs):
+        if "status" in cmd:
+            return (0, "", "")
+        if "pull" in cmd:
+            return (2, "", "fatal: unable to access repository: connection refused")
+        return (0, "", "")
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc),
+        patch("appctl_router.cmd_sync_homepage"),
+    ):
+        resp = router.dispatch(req, operator_principal)
+
+    assert resp.success is False
+    assert resp.error is not None
+    assert resp.error.code == ErrorCode.ERR_EXECUTION_FAILED
+    assert "fatal: unable to access repository: connection refused" in resp.error.message
+
+    audit_lines = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+    failed_events = [ev for ev in audit_lines if ev.get("phase") == "FAILED"]
+    assert len(failed_events) >= 1
+    failed_event = failed_events[-1]
+    assert failed_event["result"]["exit_code"] == 2
+    assert "fatal: unable to access repository: connection refused" in failed_event["result"]["message"]
+
+
+
+
+
 def test_parse_dotenv_rejects_reserved_platform_keys(tmp_path: Path):
     """Ensure parse_dotenv rejects platform routing and docker config variables in .env (CR-DI-07)."""
     env_file = tmp_path / ".env"
