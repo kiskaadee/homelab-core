@@ -742,8 +742,12 @@ def cmd_sync_homepage(args: list[str] | None = None) -> None:
         lines.append("")
 
     content = "\n".join(lines).strip() + "\n"
-    with open(services_yaml_path, "w", encoding="utf-8") as f:
+    tmp_services_path = services_yaml_path + ".tmp"
+    with open(tmp_services_path, "w", encoding="utf-8") as f:
         f.write(content)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_services_path, services_yaml_path)
 
     print(
         f"✨ Homepage synchronized successfully ({len(visible_apps)} visible apps in {len(sorted_groups)} groups)"

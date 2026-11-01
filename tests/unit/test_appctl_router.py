@@ -7,6 +7,7 @@ test_<subject>_<accepts|rejects|enforces>_<condition>
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1466,3 +1467,52 @@ deployment:
         assert "Post-pull branch mismatch" in resp.error.message
         assert "expected 'main'" in resp.error.message
         assert "declared 'production'" in resp.error.message
+
+
+def test_operational_router_catches_unhandled_runtime_exceptions_and_records_failed_audit(
+    tmp_path: Path, admin_principal: Principal, mock_sites_dir: Path
+):
+    """Ensure unexpected exceptions in router return 500 ERR_EXECUTION_FAILED and log FAILED audit (CR-SO-04)."""
+    audit_file = tmp_path / "audit.jsonl"
+    router = OperationalRouter(
+        audit_logger=AuditLogger(audit_file),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_sites_dir,
+    )
+    req = OperationRequest.model_validate({
+        "operation": "platform.sync_homepage",
+    })
+
+    with patch("appctl_router.cmd_sync_homepage", side_effect=RuntimeError("Corrupt filesystem")):
+        resp = router.dispatch(req, admin_principal)
+        assert resp.success is False
+        assert resp.error is not None
+        assert resp.error.code == ErrorCode.ERR_EXECUTION_FAILED
+        assert "Unexpected execution failure" in resp.error.message
+
+    events = [json.loads(line) for line in audit_file.read_text().splitlines() if line.strip()]
+    assert len(events) == 2
+    assert events[0]["phase"] == "DISPATCHED"
+    assert events[1]["phase"] == "FAILED"
+    assert events[1]["result"]["error_code"] == ErrorCode.ERR_EXECUTION_FAILED.value
+
+
+def test_trigger_homepage_sync_acquires_homepage_sync_lock(tmp_path: Path, mock_sites_dir: Path):
+    """Ensure _trigger_homepage_sync executes under homepage_sync_lock (CR-DI-05)."""
+    lock_mgr = TargetLockManager(tmp_path / "locks")
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=lock_mgr,
+        sites_dir=mock_sites_dir,
+    )
+    lock_acquired = False
+
+    def mock_sync():
+        nonlocal lock_acquired
+        lock_file = lock_mgr.lock_dir / "_homepage_sync.lock"
+        assert lock_file.exists()
+        lock_acquired = True
+
+    with patch("appctl_router.cmd_sync_homepage", side_effect=mock_sync):
+        router._trigger_homepage_sync()
+        assert lock_acquired is True

@@ -366,6 +366,17 @@ def test_rbac_operator_denied_on_core_targets(
         assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
 
 
+def test_rbac_operator_denied_on_case_variant_core_targets(admitted_workloads: set[str]):
+    """Ensure case variants ('Core', 'TRAEFIK', 'Authelia') are rejected for operator role (CR-DI-06)."""
+    operator = Principal(identity="gitops_bot", role=Role.OPERATOR, auth_method="bearer_token")
+    for variant in ["Core", "CORE", "Traefik", "TRAEFIK", "Authelia"]:
+        with pytest.raises(AuthorizationError) as exc_info:
+            enforce_rbac(operator, OperationType.WORKLOAD_CONFIG, variant, admitted_workloads)
+        assert "not permitted to target core service" in str(exc_info.value)
+        assert exc_info.value.code == ErrorCode.ERR_PERMISSION_DENIED
+
+
+
 def test_rbac_operator_denied_without_target_on_mutating_or_sensitive_ops(
     admitted_workloads: set[str],
 ):

@@ -386,13 +386,27 @@ class AppctlHTTPHandler(http.server.BaseHTTPRequestHandler):
             return
 
         # Dispatch operation to OperationalRouter
-        resp = self.appctl_server.router.dispatch(
-            request=req,
-            principal=principal,
-            transport=transport,
-            origin=origin,
-            client=client_header,
-        )
+        try:
+            resp = self.appctl_server.router.dispatch(
+                request=req,
+                principal=principal,
+                transport=transport,
+                origin=origin,
+                client=client_header,
+            )
+        except Exception as exc:
+            logger.exception("Top-level unhandled exception during operation dispatch")
+            self._send_operation_error(
+                status_code=500,
+                error=OperationError(
+                    code=ErrorCode.ERR_EXECUTION_FAILED,
+                    message=f"Internal daemon execution error: {exc}",
+                ),
+                operation=req.operation,
+                target=req.target,
+                op_id=generate_operation_id(),
+            )
+            return
 
         status_code = resp.error.code.http_status if (not resp.success and resp.error) else 200
         self._send_operation_response(status_code, resp)

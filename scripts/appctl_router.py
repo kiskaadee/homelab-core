@@ -12,6 +12,7 @@ Implements the single command execution pipeline for homelab-appctl.service:
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import time
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger("appctl_router")
 from appctl_audit import (
     AuditLogger,
     AuditPersistenceError,
@@ -620,25 +623,29 @@ class OperationalRouter:
             duration_ms = int((time.perf_counter() - start_time) * 1000)
 
             # Audit COMPLETED for mutating ops and sensitive reads
+            # Audit COMPLETED for mutating ops and sensitive reads
             if (
                 operation in MUTATING_OPERATIONS
                 or operation in SENSITIVE_READ_OPERATIONS
             ):
-                self.audit_logger.log_completed(
-                    operation_id=op_id,
-                    principal=principal_audit,
-                    action=operation.value,
-                    target=target,
-                    transport=transport,
-                    origin=origin,
-                    client=client,
-                    parameters=request.parameters,
-                    duration_ms=duration_ms,
-                    commit_sha=commit_sha,
-                    message=result_data.get(
-                        "message", "Operation completed successfully"
-                    ),
-                )
+                try:
+                    self.audit_logger.log_completed(
+                        operation_id=op_id,
+                        principal=principal_audit,
+                        action=operation.value,
+                        target=target,
+                        transport=transport,
+                        origin=origin,
+                        client=client,
+                        parameters=request.parameters,
+                        duration_ms=duration_ms,
+                        commit_sha=commit_sha,
+                        message=result_data.get(
+                            "message", "Operation completed successfully"
+                        ),
+                    )
+                except AuditPersistenceError as audit_err:
+                    logger.error("Failed to persist COMPLETED audit record: %s", audit_err)
 
             return OperationResponse(
                 version="1.0",
@@ -658,20 +665,23 @@ class OperationalRouter:
                 operation in MUTATING_OPERATIONS
                 or operation in SENSITIVE_READ_OPERATIONS
             ):
-                self.audit_logger.log_failed(
-                    operation_id=op_id,
-                    principal=principal_audit,
-                    action=operation.value,
-                    target=target,
-                    transport=transport,
-                    origin=origin,
-                    client=client,
-                    parameters=request.parameters,
-                    duration_ms=duration_ms,
-                    exit_code=getattr(err, "exit_code", 1),
-                    error_code=err.code.value,
-                    message=str(err),
-                )
+                try:
+                    self.audit_logger.log_failed(
+                        operation_id=op_id,
+                        principal=principal_audit,
+                        action=operation.value,
+                        target=target,
+                        transport=transport,
+                        origin=origin,
+                        client=client,
+                        parameters=request.parameters,
+                        duration_ms=duration_ms,
+                        exit_code=getattr(err, "exit_code", 1),
+                        error_code=err.code.value,
+                        message=str(err),
+                    )
+                except AuditPersistenceError as audit_err:
+                    logger.error("Failed to persist FAILED audit record: %s", audit_err)
             return OperationResponse(
                 version="1.0",
                 success=False,
@@ -680,6 +690,42 @@ class OperationalRouter:
                 target=target,
                 duration_ms=duration_ms,
                 error=OperationError(code=err.code, message=str(err)),
+            )
+        except Exception as err:
+            logger.exception("Unexpected execution error in router")
+            duration_ms = int((time.perf_counter() - start_time) * 1000)
+            if (
+                operation in MUTATING_OPERATIONS
+                or operation in SENSITIVE_READ_OPERATIONS
+            ):
+                try:
+                    self.audit_logger.log_failed(
+                        operation_id=op_id,
+                        principal=principal_audit,
+                        action=operation.value,
+                        target=target,
+                        transport=transport,
+                        origin=origin,
+                        client=client,
+                        parameters=request.parameters,
+                        duration_ms=duration_ms,
+                        exit_code=1,
+                        error_code=ErrorCode.ERR_EXECUTION_FAILED.value,
+                        message=f"Unexpected execution failure: {err}",
+                    )
+                except AuditPersistenceError as audit_err:
+                    logger.error("Failed to persist FAILED audit record: %s", audit_err)
+            return OperationResponse(
+                version="1.0",
+                success=False,
+                operation_id=op_id,
+                operation=operation,
+                target=target,
+                duration_ms=duration_ms,
+                error=OperationError(
+                    code=ErrorCode.ERR_EXECUTION_FAILED,
+                    message=f"Unexpected execution failure: {err}",
+                ),
             )
 
     # -----------------------------------------------------------------------
@@ -1104,7 +1150,7 @@ class OperationalRouter:
         }, commit_sha
 
     def _op_platform_sync_homepage(self) -> dict[str, Any]:
-        self._trigger_homepage_sync()
+        cmd_sync_homepage()
         return {
             "action": "sync_homepage",
             "message": "Homepage dashboard synchronized successfully",
@@ -1113,8 +1159,9 @@ class OperationalRouter:
     def _trigger_homepage_sync(self) -> None:
         """Atomic compile of Homepage dashboard services.yaml under _homepage_sync.lock."""
         try:
-            cmd_sync_homepage()
-        except (OSError, ValueError, RuntimeError) as exc:
+            with self.lock_manager.homepage_sync_lock():
+                cmd_sync_homepage()
+        except (OSError, ValueError, RuntimeError, ConcurrentMutationError) as exc:
             import sys
 
             print(f"Warning: Homepage sync non-fatal error: {exc}", file=sys.stderr)
