@@ -1351,3 +1351,118 @@ def test_parse_dotenv_rejects_reserved_platform_keys(tmp_path: Path):
             RouterValidationError, match="Prohibited reserved environment key"
         ):
             parse_dotenv(env_file, validate_keys=True)
+
+
+def test_operational_router_workload_update_succeeds_when_source_ref_is_tag_and_deployment_branch_matches(
+    tmp_path: Path, admin_principal: Principal, mock_sites_dir: Path
+):
+    """Ensure workload.update validates deployment.branch (Tier 2) and does not conflate with source.ref (Tier 1) (CR-SS-01)."""
+    app_dir = mock_sites_dir / "bitetrack"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    manifest_content = """
+name: "bitetrack"
+source:
+  type: "git"
+  url: "https://github.com/example/bitetrack.git"
+  ref: "v2.5.0"
+deployment:
+  strategy: "compose"
+  branch: "main"
+  actions:
+    - "compose_up"
+"""
+    (app_dir / "app.yaml").write_text(manifest_content.strip(), encoding="utf-8")
+    (app_dir / "docker-compose.yml").write_text("services:\n  app:\n    image: app:latest\n", encoding="utf-8")
+
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_sites_dir,
+    )
+    req = OperationRequest.model_validate({
+        "operation": "workload.update",
+        "target": "bitetrack",
+        "parameters": {"expected_branch": "main"},
+    })
+
+    mock_app = MagicMock()
+    mock_app.name = "bitetrack"
+    mock_app.dir_path = str(app_dir)
+
+    executed_cmds: list[list[str]] = []
+
+    def mock_subproc(cmd: list[str], **kwargs):
+        executed_cmds.append(cmd)
+        if "status" in cmd:
+            return 0, "", ""
+        if "pull" in cmd and "git" in cmd:
+            return 0, "Fast-forward", ""
+        if "rev-parse" in cmd:
+            return 0, "1234567", ""
+        return 0, "ok", ""
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc),
+        patch("appctl_router.cmd_sync_homepage"),
+    ):
+        resp = router.dispatch(req, admin_principal)
+        assert resp.success is True
+        assert resp.result is not None
+        pull_calls = [c for c in executed_cmds if "pull" in c and "git" in c]
+        assert len(pull_calls) == 1
+        assert pull_calls[0] == ["git", "-C", str(app_dir), "pull", "--ff-only", "origin", "--", "main"]
+
+
+def test_operational_router_workload_update_rejects_deployment_branch_mismatch_image_only(
+    tmp_path: Path, admin_principal: Principal, mock_sites_dir: Path
+):
+    """Ensure workload.update validates deployment.branch for image-only workloads with source=None (CR-SS-01)."""
+    app_dir = mock_sites_dir / "imageonly"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    manifest_content = """
+name: "imageonly"
+deployment:
+  strategy: "compose"
+  branch: "production"
+  actions:
+    - "compose_up"
+"""
+    (app_dir / "app.yaml").write_text(manifest_content.strip(), encoding="utf-8")
+    (app_dir / "docker-compose.yml").write_text("services:\n  app:\n    image: app:latest\n", encoding="utf-8")
+
+    router = OperationalRouter(
+        audit_logger=AuditLogger(tmp_path / "audit.jsonl"),
+        lock_manager=TargetLockManager(tmp_path / "locks"),
+        sites_dir=mock_sites_dir,
+    )
+    req = OperationRequest.model_validate({
+        "operation": "workload.update",
+        "target": "imageonly",
+        "parameters": {"expected_branch": "main"},
+    })
+
+    mock_app = MagicMock()
+    mock_app.name = "imageonly"
+    mock_app.dir_path = str(app_dir)
+
+    def mock_subproc(cmd: list[str], **kwargs):
+        if "status" in cmd:
+            return 0, "", ""
+        if "pull" in cmd and "git" in cmd:
+            return 0, "Fast-forward", ""
+        if "rev-parse" in cmd:
+            return 0, "1234567", ""
+        return 0, "ok", ""
+
+    with (
+        patch("appctl_router.resolve_app", return_value=mock_app),
+        patch("appctl_router.run_bounded_subprocess", side_effect=mock_subproc),
+    ):
+        resp = router.dispatch(req, admin_principal)
+        assert resp.success is False
+        assert resp.error is not None
+        assert resp.error.code == ErrorCode.ERR_VALIDATION_FAILED
+        assert "Post-pull branch mismatch" in resp.error.message
+        assert "expected 'main'" in resp.error.message
+        assert "declared 'production'" in resp.error.message

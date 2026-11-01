@@ -1006,7 +1006,7 @@ class OperationalRouter:
         # 2. git pull --ff-only
         pull_cmd = ["git", "-C", str(app_dir), "pull", "--ff-only"]
         if params.expected_branch:
-            pull_cmd.extend(["origin", params.expected_branch])
+            pull_cmd.extend(["origin", "--", params.expected_branch])
         code, pull_out, pull_err = run_bounded_subprocess(
             pull_cmd, cwd=app_dir, timeout=60.0
         )
@@ -1026,12 +1026,12 @@ class OperationalRouter:
             )
             if (
                 params.expected_branch
-                and manifest.source
-                and manifest.source.ref != params.expected_branch
+                and manifest.deployment
+                and manifest.deployment.branch != params.expected_branch
             ):
                 raise RouterValidationError(
                     f"Post-pull branch mismatch for '{app.name}': expected '{params.expected_branch}', "
-                    f"manifest declared '{manifest.source.ref}'"
+                    f"manifest declared '{manifest.deployment.branch}'"
                 )
             declared_actions = manifest.deployment.actions or ["compose_up"]
 
